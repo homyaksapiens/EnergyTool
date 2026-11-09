@@ -11,9 +11,9 @@
 
 | Зона | Папки и файлы | Владелец |
 |---|---|---|
-| Бот, поиск, сабмиты | `bot/`, `eval/`, `scripts/`, `SUBMISSIONS.md` | _имя_ |
-| Веб: бэкенд и фронтенд | `backend/`, `frontend/`, `Dockerfile`, `compose.yaml` | _имя_ |
-| Сценарии, документация, защита | `docs/`, `README.md`, презентация | _имя_ |
+| Бот, поиск, сабмиты | `bot/`, `eval/`, `scripts/`, `SUBMISSIONS.md` | Егор М., Никита Г.|
+| Веб: бэкенд и фронтенд | `backend/`, `frontend/`, `Dockerfile`, `compose.yaml` | Денис. Л, Егор Б. |
+| Сценарии, документация, защита | `docs/`, `README.md`, презентация | Кирилл С.|
 
 `CLAUDE.md` и `CONTRACTS.md` — общие: правки через PR, апрув всех.
 
