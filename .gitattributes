@@ -1,0 +1,6 @@
+# одинаковые переводы строк у всех в команде, независимо от ОС
+* text=auto eol=lf
+*.pdf binary
+*.zip binary
+*.png binary
+*.jpg binary
