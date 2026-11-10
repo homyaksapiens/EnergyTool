@@ -4,3 +4,6 @@
 *.zip binary
 *.png binary
 *.jpg binary
+# Windows-скрипты (например, .claude/skills/impeccable/scripts/impeccable.cmd) — с виндовыми переводами строк
+*.cmd text eol=crlf
+*.bat text eol=crlf
