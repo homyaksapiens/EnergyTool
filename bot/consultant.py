@@ -49,10 +49,10 @@ def search_queries(messages: list[dict]) -> list[str]:
     last = users[-1]
     first_and_last = f"{users[0]} {last}" if len(users) > 1 else last
     all_users = " ".join(users)
-    full = " ".join(m["content"] for m in messages)
 
     queries = []
-    for q in (first_and_last, all_users, full):
+    # first_and_last идёт последним, так как retrieve() передаёт в реранкер queries[-1]
+    for q in (last, all_users, first_and_last):
         if q and q not in queries:
             queries.append(q)
     return queries

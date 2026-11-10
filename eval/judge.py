@@ -55,6 +55,17 @@ def find_default_runs() -> tuple[Path, Path]:
         sys.exit(f"В папке runs/ найдено прогонов: {len(subdirs)}. Для сравнения нужно минимум 2 (или укажите пути явно).")
     return subdirs[0] / "submission.csv", subdirs[-1] / "submission.csv"
 
+def load_sources(csv_path: Path) -> dict[str, list[str]]:
+    """Читает список найденных чанков из debug.jsonl, чтобы видеть, менялся ли поиск."""
+    dbg = csv_path.parent / "debug.jsonl"
+    if not dbg.is_file():
+        return {}
+    out = {}
+    for line in dbg.read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        out[row["id"]] = [s["title"] for s in row.get("sources", [])]
+    return out
+
 
 def call_judge(client: httpx.Client, base_url: str, key: str, model: str,
                question: str, golden: str, ans_a: str, ans_b: str) -> dict:
@@ -129,23 +140,32 @@ def main() -> None:
     client = httpx.Client(timeout=120.0, trust_env=False)
     results = []
 
+    base_sources = load_sources(base_path)
+    cand_sources = load_sources(cand_path)
+
     for qid in qids:
         q, g = questions[qid], golden[qid]
         b_ans, c_ans = baseline[qid], candidate[qid]
 
+        same_chunks = base_sources.get(qid) == cand_sources.get(qid)
+        tag = "[чанки те же]" if same_chunks else "[ПОИСК ИЗМЕНИЛСЯ]"
+
         # Раунд 1: A = Candidate, B = Baseline
         r1 = call_judge(client, base_url, api_key, model, q, g, c_ans, b_ans)
-        # Раунд 2: A = Baseline, B = Candidate (меняем местами)
-        r2 = call_judge(client, base_url, api_key, model, q, g, b_ans, c_ans)
-
-        # MatchRate кандидата (среднее за 2 раунда)
-        cand_match = (r1["match_a"] + r2["match_b"]) / 2.0
-        base_match = (r1["match_b"] + r2["match_a"]) / 2.0
-
-        # WinRate кандидата за 2 раунда
-        w1 = 1.0 if r1["winner"] == "A" else (0.0 if r1["winner"] == "B" else 0.5)
-        w2 = 1.0 if r2["winner"] == "B" else (0.0 if r2["winner"] == "A" else 0.5)
-        win_rate = (w1 + w2) / 2.0
+        if b_ans.strip() == c_ans.strip():
+            # Если текст ответа идентичен — не дергаем судью второй раз, присуждаем честную ничью
+            cand_match = base_match = r1["match_a"]
+            win_rate = 0.5
+            reason = f"{tag} Ответы идентичны"
+        else:
+            # Раунд 2: A = Baseline, B = Candidate (меняем местами)
+            r2 = call_judge(client, base_url, api_key, model, q, g, b_ans, c_ans)
+            cand_match = (r1["match_a"] + r2["match_b"]) / 2.0
+            base_match = (r1["match_b"] + r2["match_a"]) / 2.0
+            w1 = 1.0 if r1["winner"] == "A" else (0.0 if r1["winner"] == "B" else 0.5)
+            w2 = 1.0 if r2["winner"] == "B" else (0.0 if r2["winner"] == "A" else 0.5)
+            win_rate = (w1 + w2) / 2.0
+            reason = f"{tag} {r1['reason'] or r2['reason']}"
 
         score = 0.7 * cand_match + 0.3 * win_rate
         results.append({
@@ -154,9 +174,9 @@ def main() -> None:
             "cand_match": cand_match,
             "base_match": base_match,
             "win_rate": win_rate,
-            "reason": r1["reason"] or r2["reason"],
+            "reason": reason,
         })
-        print(f"ID {qid:>2}: Score={score:.2f} (Match: {cand_match:.2f} vs {base_match:.2f}, WinRate: {win_rate:.2f}) | {results[-1]['reason']}")
+        print(f"ID {qid:>2}: Score={score:.2f} (Match: {cand_match:.2f} vs {base_match:.2f}, WinRate: {win_rate:.2f}) | {reason}")
 
     avg_match = sum(r["cand_match"] for r in results) / max(len(results), 1)
     avg_base_match = sum(r["base_match"] for r in results) / max(len(results), 1)

@@ -173,24 +173,30 @@ WORD_RE = re.compile(r"[a-zа-я0-9]+")
 STOP = set("""и в во на с со по для от до из к ко о об а но или не что это как у же ли бы мы вы они он она оно
 их его ее мне нам вам вас нас там тут так то при за под над про через если ну да нет есть быть был была были
 будет можно нужно ваш наш ли уже еще""".split())
+
+
 SUFFIXES = sorted(set("""ами ями ого его ому ему ыми ими ых их ой ей ий ый ая яя ое ее ые ие ую юю ам ям ах ях ом ем
 ов ев ия ии ию ья ье ьи ью ать ять ить еть ет ит ут ют ат ят ешь ишь ете ите ла ли ло а я о е ы и у ю ь й""".split()),
                   key=len, reverse=True)
+SHORT_SUFFIXES = {"а", "я", "о", "е", "ы", "и", "у", "ю", "ь", "ой", "ей", "ами", "ями", "ах", "ях"}
+VOWELS = set("аеиоуыэюя")
 
 
 def stem(word: str) -> str:
-    """Грубый стемминг для русского: срезаем окончание (а для разговорных -ка/-ки — и суффикс к)."""
+    """Грубый стемминг для русского: срезаем окончание (а для разговорных -ка/-ки после согласной — и суффикс к)."""
     if len(word) <= 3 or word.isdigit():
         return word
+    base = word[:7]
     for suffix in SUFFIXES:
-        min_root = 3 if suffix in ("а", "и", "у", "е", "ой", "ами", "ах") else 4
+        min_root = 3 if suffix in SHORT_SUFFIXES else 4
         if word.endswith(suffix) and len(word) - len(suffix) >= min_root:
             base = word[:-len(suffix)][:7]
-            # Разговорный суффикс -к- в коротких словах (сим-к-и -> сим, фот-к-а -> фот)
-            if len(base) == 4 and base.endswith("к"):
-                return base[:-1]
-            return base
-    return word[:7]
+            break
+    # Разговорный суффикс -к- после согласной в коротких словах (сим-к-и -> сим, фот-к-а -> фот),
+    # но НЕ после гласной (срок/сроки, блок/блоки, знак/знаки остаются целыми)
+    if len(base) == 4 and base.endswith("к") and base[-2] not in VOWELS:
+        return base[:-1]
+    return base
 
 
 def tokenize(text: str) -> list[str]:
