@@ -10,8 +10,11 @@
    Когда бэкенд будет готов, этот файл не понадобится: api.js переключится на настоящие запросы. */
 
 const MockServer = (() => {
-  const DB_KEY = "et-mock-db-v1";
+  const DB_KEY = "et-mock-db-v2"; // v2: сессии помнят номер вошедшего клиента (client_phone)
   const AUTH_KEY = "et-mock-auth"; // "1" — клиент как будто вошёл на сайт по номеру
+  const PHONE = "+7 900 000-00-01"; // номер «вошедшего» клиента в наброске
+
+  const isAuth = () => localStorage.getItem(AUTH_KEY) === "1";
 
   // Какой ответ вернёт следующий запрос к чату. Меняется панелью «Набросок» (sketch.js).
   // "auto" — выбрать по ходу диалога, остальные значения — принудительно один раз.
@@ -92,7 +95,8 @@ const MockServer = (() => {
   // ---------- Обработчики путей ----------
 
   function createSession(db) {
-    const s = { session_id: newId(), created_at: now(), updated_at: now(), lead_id: null, messages: [] };
+    // Вошедший клиент: сессия запоминает его номер, чтобы попасть в «Ваши диалоги» (GET /api/me/sessions)
+    const s = { session_id: newId(), created_at: now(), updated_at: now(), lead_id: null, client_phone: isAuth() ? PHONE : null, messages: [] };
     db.sessions.push(s);
     return s;
   }
@@ -184,9 +188,10 @@ const MockServer = (() => {
     ].join("\n");
   }
 
-  function listSessions(db) {
+  // filter — какие сессии брать: все (панель менеджера) или только вошедшего клиента
+  function listSessions(db, filter = () => true) {
     return db.sessions
-      .filter((s) => s.messages.length) // пустые «Новый диалог» без реплик не показываем
+      .filter((s) => s.messages.length && filter(s)) // пустые «Новый диалог» без реплик не показываем
       .map((s) => ({
         session_id: s.session_id,
         created_at: s.created_at,
@@ -211,10 +216,14 @@ const MockServer = (() => {
       return { session_id: s.session_id };
     }
     if (method === "GET" && path === "/api/sessions") return listSessions(db);
+    if (method === "GET" && path === "/api/me/sessions") {
+      return isAuth() ? listSessions(db, (s) => s.client_phone === PHONE) : [];
+    }
     if (method === "GET" && (m = path.match(/^\/api\/sessions\/(\w+)$/))) {
       const s = db.sessions.find((x) => x.session_id === m[1]);
       if (!s) throw new ApiError(404, "Сессия не найдена");
-      return s;
+      const { client_phone, ...pub } = s; // номер клиента наружу не отдаём
+      return pub;
     }
     if (method === "POST" && path === "/api/chat") return chat(db, body);
     if (method === "POST" && path === "/api/leads") return createLead(db, body);
@@ -230,9 +239,7 @@ const MockServer = (() => {
     }
     if (method === "GET" && path === "/api/me") {
       // Вход на сайт изображается галочкой в панели «Набросок»
-      return localStorage.getItem(AUTH_KEY) === "1"
-        ? { authenticated: true, phone: "+7 900 000-00-01" }
-        : { authenticated: false, phone: null };
+      return isAuth() ? { authenticated: true, phone: PHONE } : { authenticated: false, phone: null };
     }
     if (method === "GET" && path === "/api/health") return { ok: true, model: "заглушка", kb_chunks: 236, dense: false };
     throw new ApiError(404, `Нет такого пути в заглушке: ${method} ${path}`);
@@ -242,17 +249,21 @@ const MockServer = (() => {
     return new Promise((r) => setTimeout(r, ms));
   }
 
-  // ---------- Стартовые данные: два выдуманных диалога, один с заявкой ----------
+  // ---------- Стартовые данные: выдуманные диалоги ----------
+  // Три диалога «вошедшего» клиента (+7 900 000-00-01), один с заявкой, и один диалог другого клиента:
+  // его видит только менеджер, в «Ваших диалогах» его быть не должно
 
   function seed() {
     const s1 = newId();
     const s2 = newId();
+    const s3 = newId();
+    const s4 = newId();
     const msg = (role, text, min, debug) => ({ role, text, created_at: now(min), ...(debug ? { debug } : {}) });
     const dbg = (ms, sources) => ({ elapsed_ms: ms, timings: { retrieval: 0.04, llm: ms / 1000 - 0.04 }, fallback: false, sources });
     return {
       sessions: [
         {
-          session_id: s1, created_at: now(-180), updated_at: now(-170), lead_id: 1,
+          session_id: s1, created_at: now(-180), updated_at: now(-170), lead_id: 1, client_phone: PHONE,
           messages: [
             msg("user", "У нас несколько магазинов. Можно смотреть их расход в одном кабинете?", -180),
             msg("assistant", REPLIES.clarify.answer, -180, dbg(3920, REPLIES.clarify.sources)),
@@ -261,10 +272,26 @@ const MockServer = (() => {
           ],
         },
         {
-          session_id: s2, created_at: now(-60), updated_at: now(-58), lead_id: null,
+          session_id: s2, created_at: now(-60), updated_at: now(-58), lead_id: null, client_phone: PHONE,
           messages: [
             msg("user", "Счёт за свет вырос в полтора раза, почему так?", -60),
             msg("assistant", REPLIES.clarify.answer, -60, dbg(3550, REPLIES.clarify.sources)),
+          ],
+        },
+        {
+          session_id: s3, created_at: now(-2900), updated_at: now(-2894), lead_id: null, client_phone: PHONE,
+          messages: [
+            msg("user", "Можно передавать показания счётчиков по фото?", -2900),
+            msg("assistant", REPLIES.clarify.answer, -2900, dbg(3310, REPLIES.clarify.sources)),
+            msg("user", "Офис и склад, по два счётчика", -2896),
+            msg("assistant", REPLIES.answer.answer, -2894, dbg(4020, REPLIES.answer.sources)),
+          ],
+        },
+        {
+          session_id: s4, created_at: now(-30), updated_at: now(-29), lead_id: null, client_phone: null,
+          messages: [
+            msg("user", "В СНТ большие потери, как найти, где теряется электроэнергия?", -30),
+            msg("assistant", REPLIES.clarify.answer, -30, dbg(3700, REPLIES.clarify.sources)),
           ],
         },
       ],

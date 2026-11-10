@@ -54,13 +54,13 @@ function renderList() {
       return;
     }
     items.innerHTML = list.map((l) => `
-      <li><button type="button" class="item ${view.selected === l.lead_id ? "is-active" : ""}" data-id="${l.lead_id}">
+      <li><button type="button" class="item ${view.selected === l.lead_id ? "is-active" : ""}" data-id="${UI.esc(l.lead_id)}">
         <span class="item__top">
           <strong>${UI.esc(l.full_name)}</strong>
-          <span class="status status--${l.status}">${STATUSES[l.status] || l.status}</span>
+          <span class="status status--${UI.esc(l.status)}">${UI.esc(STATUSES[l.status] || l.status)}</span>
         </span>
         <span class="item__sub">${UI.esc(l.company)} · ${UI.esc(l.phone)}</span>
-        <span class="item__meta">№${l.lead_id} · ${UI.dateTime(l.created_at)}</span>
+        <span class="item__meta">№${UI.esc(l.lead_id)} · ${UI.dateTime(l.created_at)}</span>
       </button></li>`).join("");
   } else {
     if (!view.sessions.length) {
@@ -68,13 +68,13 @@ function renderList() {
       return;
     }
     items.innerHTML = view.sessions.map((s) => `
-      <li><button type="button" class="item ${view.selected === s.session_id ? "is-active" : ""}" data-id="${s.session_id}">
+      <li><button type="button" class="item ${view.selected === s.session_id ? "is-active" : ""}" data-id="${UI.esc(s.session_id)}">
         <span class="item__top">
           <strong class="item__preview">${UI.esc(s.preview || "Без сообщений")}</strong>
         </span>
         <span class="item__meta">
           ${UI.dateTime(s.updated_at)} · ${s.messages} ${UI.plural(s.messages, ["сообщение", "сообщения", "сообщений"])}
-          · ${s.lead_id ? `<span class="tag tag--lead">заявка №${s.lead_id}</span>` : '<span class="tag">без заявки</span>'}
+          · ${s.lead_id ? `<span class="tag tag--lead">заявка №${UI.esc(s.lead_id)}</span>` : '<span class="tag">без заявки</span>'}
         </span>
       </button></li>`).join("");
   }
@@ -102,7 +102,7 @@ async function showLead(id) {
     <header class="detail__head">
       <div>
         <h1>${UI.esc(lead.full_name)}</h1>
-        <p class="detail__sub">${UI.esc(lead.company)} · заявка №${lead.lead_id} от ${UI.dateTime(lead.created_at)}</p>
+        <p class="detail__sub">${UI.esc(lead.company)} · заявка №${UI.esc(lead.lead_id)} от ${UI.dateTime(lead.created_at)}</p>
       </div>
       <label class="status-select">
         <span class="sr-only">Статус заявки</span>
@@ -133,7 +133,7 @@ async function showSession(id) {
       <div>
         <h1>Диалог от ${UI.dateTime(s.created_at)}</h1>
         <p class="detail__sub">Сессия <code>${UI.esc(s.session_id.slice(0, 8))}</code> ·
-          ${s.lead_id ? `<a href="#" data-lead="${s.lead_id}">заявка №${s.lead_id}</a>` : "клиент не оставил контакты"}</p>
+          ${s.lead_id ? `<a href="#" data-lead="${UI.esc(s.lead_id)}">заявка №${UI.esc(s.lead_id)}</a>` : "клиент не оставил контакты"}</p>
       </div>
     </header>
     <div class="transcript" id="transcript"><p class="muted">Загружаем диалог…</p></div>`;

@@ -110,6 +110,12 @@ result = consultant.answer(messages)
   "preview": "У нас несколько магазинов…"}]
 ```
 
+`GET /api/me/sessions` → диалоги **вошедшего клиента** (тот же номер, что в `GET /api/me`), новые сверху, формат
+элементов как у `GET /api/sessions`. Гость → `200 []`. Это левая колонка чата «Ваши диалоги»: общий `GET /api/sessions`
+клиенту не показываем — в нём разговоры всех клиентов. Чтобы список работал, сессия запоминает номер вошедшего клиента:
+`POST /api/sessions` и `POST /api/chat` без `session_id` от вошедшего клиента записывают его телефон в сессию
+(служебное поле, наружу не отдаётся). Сессии гостя ни к какому номеру не привязаны.
+
 `GET /api/sessions/{session_id}` → сессия целиком:
 ```json
 {"session_id": "8f3c…", "created_at": "…", "lead_id": null,
@@ -160,7 +166,8 @@ result = consultant.answer(messages)
 ## 5. Хранение
 
 SQLite, файл `DB_PATH` (по умолчанию `data/app.db`, в Docker — volume). Пишет только бэкенд.
-- `sessions` — `id, created_at, updated_at`
+- `sessions` — `id, created_at, updated_at, client_phone` (номер вошедшего клиента, у гостя пусто;
+  нужен для `GET /api/me/sessions`, наружу не отдаётся)
 - `messages` — `id, session_id, role, text, created_at, debug` (JSON, только у ответов бота),
   `client_message_id` (только у реплик клиента, может быть пустым)
 - `leads` — `id, session_id, created_at, full_name, phone, company, summary, status`

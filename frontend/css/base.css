@@ -46,7 +46,7 @@
   /* Движение: быстрый старт и мягкая остановка */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
-  --font: "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font: Arial, "Helvetica Neue", Helvetica, sans-serif; /* решение команды от 10.11: Arial вместо Manrope */
 }
 
 *, *::before, *::after { box-sizing: border-box; }

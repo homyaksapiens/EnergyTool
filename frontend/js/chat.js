@@ -6,7 +6,9 @@
    - режим проверки (для жюри, страница открыта с ?debug=1): под ответом время и документы базы знаний;
    - ошибки: «Повторить» без дубля вопроса, потерянная сессия → новый диалог без потери вопроса;
    - заявка прямо в чате: предложение по offer_lead или по кнопке, форма, подтверждение;
-   - «Новый диалог» с возможностью вернуть прошлый разговор.
+   - «Новый диалог» с возможностью вернуть прошлый разговор;
+   - слева «Ваши диалоги»: прошлые диалоги вошедшего клиента (GET /api/me/sessions), любой можно открыть и продолжить;
+   - справа оглавление: вопросы клиента в этом разговоре, по клику — прокрутка к вопросу.
 
    Снаружи вызываются только Chat.open(...) и Chat.close(). */
 
@@ -25,8 +27,15 @@ const Chat = (() => {
     send: document.querySelector(".composer__send"),
     debugSwitch: $("debug-switch"),
     debug: $("debug-toggle"),
-    moreBtn: $("more-btn"),
-    menu: $("chat-menu"),
+    dialogs: $("dialogs"),             // левая колонка
+    dialogsList: $("dialogs-list"),
+    dialogsHint: $("dialogs-hint"),
+    dialogsBusy: $("dialogs-busy"),    // «Другие диалоги откроются, когда консультант ответит»
+    dialogsBtn: $("dialogs-btn"),      // открывает левую колонку на узком экране
+    backdrop: $("dialogs-backdrop"),
+    outline: $("outline"),             // правая колонка — оглавление
+    outlineList: $("outline-list"),
+    main: document.querySelector(".chat__main"), // центр: лента и поле ввода
     leadBtn: $("lead-btn"),
     newBtn: $("new-chat-btn"),
     closeBtn: $("close-chat-btn"),
@@ -48,7 +57,13 @@ const Chat = (() => {
     opener: null,       // кнопка, которой открыли чат: вернём на неё фокус при закрытии
     undo: null,         // прошлый разговор после «Нового диалога» — можно вернуть
     profile: null,      // вошедший на сайт клиент: { phone } из GET /api/me; гость — null
+    dialogs: [],        // прошлые диалоги вошедшего клиента из GET /api/me/sessions
+    dialogsError: false,// список не загрузился
+    pending: 0,         // сколько вопросов ещё ждут ответа сервера — в этом или в оставленном диалоге
   };
+  let askSeq = 0;       // счётчик для id вопросов клиента: на них ссылается оглавление
+  let dialogsSeq = 0;   // номер последнего запроса списка диалогов
+  let outlinePinned = null, pinTimer = 0; // пункт оглавления, к которому сейчас прокручиваем
 
   const STATUS_IDLE = "ИИ-помощник · отвечает по материалам компании";
   const SLOW_AFTER_MS = 8000;  // после этого показываем «ответ готовится дольше обычного»
@@ -94,7 +109,7 @@ const Chat = (() => {
   }
 
   function close() {
-    closeMenu();
+    closeDrawer();
     el.root.classList.remove("is-open");
     document.body.classList.remove("chat-open");
     setPageInert(false);
@@ -117,10 +132,11 @@ const Chat = (() => {
     state.profile = await loadProfile();
     if (state.sessionId && (await restore(state.sessionId))) {
       if (intent === "lead") showLeadForm();
-      return;
+    } else {
+      setSession(null);
+      greet(intent);
     }
-    setSession(null);
-    greet(intent);
+    loadDialogs(); // без await: список слева подгрузится, пока клиент читает приветствие
   }
 
   // Кто открыл чат: вошедший клиент (номер из профиля сайта) или гость.
@@ -152,10 +168,13 @@ const Chat = (() => {
     el.feed.append(chips);
   }
 
-  // Подтянуть историю сессии с сервера (после перезагрузки страницы)
+  // Подтянуть историю сессии с сервера (после перезагрузки страницы или из списка слева).
+  // Пока ждали ответ, клиент мог открыть другой диалог — тогда эту историю в ленту не выводим
   async function restore(id) {
+    const epoch = state.epoch;
     try {
       const s = await Api.getSession(id);
+      if (epoch !== state.epoch) return true; // уже открыт другой диалог — он сам отвечает за ленту
       if (!s.messages.length) return false;
       for (const m of s.messages) {
         if (m.role === "user") addUser(m.text);
@@ -182,10 +201,11 @@ const Chat = (() => {
   // ---------- «Новый диалог» и возврат прошлого ----------
 
   function newDialog() {
-    closeMenu();
+    closeDrawer();
     const hadTalk = Boolean(el.feed.querySelector(".msg--user"));
-    // Диалог и так пустой — сбрасывать нечего (и не теряем «Вернуть прошлый»)
-    if (!hadTalk && !state.busy) { el.input.focus(); return; }
+    // Диалог и так пустой — сбрасывать нечего (и не теряем «Вернуть прошлый»).
+    // Но если прошлый диалог ещё грузится из списка слева — сбрасываем, чтобы он не появился
+    if (!hadTalk && !state.busy && !state.sessionId) { el.input.focus(); return; }
 
     // Запоминаем прошлый разговор целиком: узлы ленты и состояние — чтобы вернуть одним нажатием
     state.undo = hadTalk ? {
@@ -215,6 +235,8 @@ const Chat = (() => {
       note.querySelector("button").addEventListener("click", undoNewDialog);
       el.feed.prepend(note);
     }
+    rebuildOutline();
+    renderDialogs();
     announce("Начат новый диалог");
     el.input.focus();
   }
@@ -229,6 +251,8 @@ const Chat = (() => {
     state.leadDeclined = u.leadDeclined;
     state.epoch = u.epoch; // ответ, который ещё готовится, снова попадёт в эту ленту
     setBusy(u.busy);
+    rebuildOutline();
+    renderDialogs();
     announce("Прошлый разговор возвращён");
     scrollDown();
     el.input.focus();
@@ -238,6 +262,7 @@ const Chat = (() => {
   function dropUndo() {
     state.undo = null;
     el.feed.querySelectorAll(".note--undo").forEach((n) => n.remove());
+    updateDialogsLock();
   }
 
   // ---------- Отправка реплики ----------
@@ -260,16 +285,26 @@ const Chat = (() => {
     setBusy(true);
     const typing = addTyping();
 
+    state.pending++;
+    updateDialogsLock();
     try {
       const res = await Api.chat(state.sessionId, text, id);
-      if (epoch !== state.epoch) return; // пока ждали, начали новый диалог
+      // Пока ждали, начали новый диалог: ответ кладём в сохранённый прошлый разговор («Вернуть прошлый»)
+      if (epoch !== state.epoch) { parkAnswer(epoch, typing, botNode(res.answer, res.debug), res.session_id); return; }
       setSession(res.session_id);
       typing.remove();
       addBot(res.answer, res.debug);
       announce(`Консультант: ${res.answer}`);
       if (res.offer_lead && !state.leadId && !state.leadDeclined) showLeadOffer();
+      loadDialogs(); // новый диалог появится слева, у старого обновится время
     } catch (err) {
-      if (epoch !== state.epoch) return;
+      if (epoch !== state.epoch) {
+        const note = document.createElement("p");
+        note.className = "note";
+        note.textContent = "Ответ на последний вопрос не пришёл — задайте его ещё раз.";
+        parkAnswer(epoch, typing, note);
+        return;
+      }
       typing.remove();
       if (err.status === 404 && !retry) {
         // Сервер не знает нашу сессию (например, перезапустили) — начинаем новую и повторяем вопрос
@@ -280,8 +315,24 @@ const Chat = (() => {
       }
       addError(err.message, text, id);
     } finally {
+      state.pending--;
       if (epoch === state.epoch) setBusy(false);
+      updateDialogsLock();
     }
+  }
+
+  // Ответ пришёл, когда клиент уже начал новый диалог. Если прошлый разговор ещё можно вернуть —
+  // убираем из него «печатает» и кладём ответ, иначе после «Вернуть прошлый» чат навсегда остался бы «занят»
+  // sessionId — id сессии из ответа: у первого вопроса нового диалога его ещё не было
+  function parkAnswer(epoch, typing, node, sessionId) {
+    typing.remove();
+    const u = state.undo;
+    if (!u || u.epoch !== epoch) return;
+    u.nodes = u.nodes.filter((n) => n !== typing.el);
+    if (node) u.nodes.push(node);
+    if (sessionId) u.sessionId = sessionId;
+    u.busy = false;
+    updateDialogsLock();
   }
 
   function newClientId() {
@@ -292,6 +343,25 @@ const Chat = (() => {
     state.busy = busy;
     el.status.textContent = busy ? "Подбирает ответ…" : STATUS_IDLE;
     updateComposer();
+    updateDialogsLock();
+  }
+
+  // Хоть один вопрос ещё ждёт ответа — здесь или в диалоге, из которого ушли
+  function answerPending() {
+    return state.pending > 0;
+  }
+
+  // Пока ответ готовится, другие диалоги в списке слева приглушены и не открываются.
+  // Пояснение под заголовком показываем только после попытки открыть такой диалог (openDialog),
+  // чтобы список не прыгал на каждом вопросе
+  function updateDialogsLock() {
+    const locked = answerPending();
+    el.dialogs.classList.toggle("is-locked", locked);
+    if (!locked) el.dialogsBusy.hidden = true;
+    el.dialogsList.querySelectorAll(".dialog").forEach((b) => {
+      if (locked && b.getAttribute("aria-current") !== "true") b.setAttribute("aria-disabled", "true");
+      else b.removeAttribute("aria-disabled");
+    });
   }
 
   // ---------- Сообщения в ленте ----------
@@ -299,18 +369,25 @@ const Chat = (() => {
   function addUser(text) {
     const div = document.createElement("div");
     div.className = "msg msg--user";
+    div.id = `ask-${++askSeq}`; // на этот id ссылается пункт оглавления справа
     div.innerHTML = `<div class="msg__bubble">${textToHtml(text)}</div>`;
     el.feed.append(div);
+    rebuildOutline();
     scrollDown();
   }
 
   // debug — объект из ответа API; без него (приветствие) блок отладки не рисуем
   function addBot(text, debug) {
+    el.feed.append(botNode(text, debug));
+    scrollDown();
+  }
+
+  // Реплика бота без вставки в ленту (нужна и для ответа, отложенного в «Вернуть прошлый»)
+  function botNode(text, debug) {
     const div = document.createElement("div");
     div.className = "msg msg--bot" + (debug && debug.fallback ? " msg--fallback" : "");
     div.innerHTML = `<div class="msg__bubble">${textToHtml(text)}</div>` + (debug ? debugHtml(debug) : "");
-    el.feed.append(div);
-    scrollDown();
+    return div;
   }
 
   // Блок отладки: строка «4,2 с · 3 документа», по клику — подробности
@@ -351,7 +428,7 @@ const Chat = (() => {
     const timer = setTimeout(() => {
       div.querySelector(".typing__text").textContent = "Ответ готовится дольше обычного, ещё немного";
     }, SLOW_AFTER_MS);
-    return { remove: () => { clearTimeout(timer); div.remove(); } };
+    return { el: div, remove: () => { clearTimeout(timer); div.remove(); } };
   }
 
   // Ошибка: что случилось + «Повторить» тот же вопрос с той же меткой
@@ -411,7 +488,7 @@ const Chat = (() => {
   }
 
   function showLeadForm() {
-    closeMenu();
+    closeDrawer();
     if (state.leadId) {
       addNote(`Заявка №${state.leadId} уже у менеджера. Можно продолжать разговор — он увидит и новые сообщения.`);
       return;
@@ -568,27 +645,64 @@ const Chat = (() => {
     formError.hidden = true;
     submit.disabled = true;
     submit.textContent = "Отправляем…";
+    const phone = leadPhone(form);
+    let sessionId = null; // заявка относится к этому диалогу, даже если клиент откроет другой
     try {
       // Заявке нужна сессия: если клиент ещё ничего не писал — создаём её
       if (!state.sessionId) setSession((await Api.newSession()).session_id);
-      const phone = leadPhone(form);
+      sessionId = state.sessionId;
+      // Прошлая попытка оборвалась без ответа, а сервер мог дописать заявку позже —
+      // сначала сверяемся с сессией и отправляем, только если заявки там ещё нет
+      if (form.dataset.unsure === "1") {
+        const s = await Api.getSession(sessionId);
+        if (s.lead_id) { leadSent(form, { lead_id: s.lead_id, summary: null }, phone, sessionId); return; }
+      }
       const res = await Api.createLead({
-        session_id: state.sessionId,
+        session_id: sessionId,
         full_name: form.elements.full_name.value.trim(),
         phone,
         company: form.elements.company.value.trim(),
         consent: form.elements.consent.checked,
       });
-      state.leadId = res.lead_id;
-      form.replaceWith(leadDone(res, phone));
-      announce(`Заявка номер ${res.lead_id} отправлена. Менеджер позвонит на ${phone}.`);
-      scrollDown();
+      leadSent(form, res, phone, sessionId);
     } catch (err) {
+      // Связь оборвалась или сервер не ответил вовремя — заявка могла всё-таки записаться.
+      // Сверяемся с сессией: если заявка есть, показываем подтверждение, а не «Попробуйте ещё раз»,
+      // иначе повторное нажатие создало бы у менеджера вторую заявку
+      if (err.status === 0 && sessionId) {
+        try {
+          const s = await Api.getSession(sessionId);
+          if (s.lead_id) { leadSent(form, { lead_id: s.lead_id, summary: null }, phone, sessionId); return; }
+        } catch { /* сверить не удалось — показываем исходную ошибку */ }
+        form.dataset.unsure = "1"; // при следующем нажатии сначала проверим, не дошла ли заявка
+      }
       formError.hidden = false;
-      formError.textContent = err.message; // для 422 — пояснение сервера, что исправить
+      // Для 422 — пояснение сервера, что исправить. Для обрыва связи — что повтор не создаст вторую заявку
+      formError.textContent = err.status === 0 && sessionId
+        ? "Не удалось подтвердить отправку. Нажмите «Отправить заявку» ещё раз — мы проверим, дошла ли она, и не отправим её дважды."
+        : err.message;
       submit.disabled = false;
       submit.textContent = "Отправить заявку";
     }
+  }
+
+  // Заявка записана: подтверждение вместо формы
+  function leadSent(form, res, phone, sessionId) {
+    loadDialogs(); // у диалога слева появится «заявка №…»
+    if (state.sessionId !== sessionId) {
+      // Пока отправляли, клиент ушёл в другой диалог. Если этот разговор можно вернуть («Вернуть прошлый») —
+      // кладём в него подтверждение вместо формы, иначе форма зависла бы на «Отправляем…»
+      const u = state.undo;
+      if (u && u.sessionId === sessionId) {
+        u.leadId = res.lead_id;
+        u.nodes = u.nodes.map((n) => (n === form ? leadDone(res, phone) : n));
+      }
+      return;
+    }
+    state.leadId = res.lead_id;
+    form.replaceWith(leadDone(res, phone));
+    announce(`Заявка номер ${res.lead_id} отправлена. Менеджер позвонит на ${phone}.`);
+    scrollDown();
   }
 
   // Подтверждение: номер заявки и что увидит менеджер
@@ -598,7 +712,7 @@ const Chat = (() => {
     div.innerHTML = `
       <div class="lead-done__icon">${UI.icon("check")}</div>
       <div>
-        <h3>Заявка №${res.lead_id} отправлена</h3>
+        <h3>Заявка №${UI.esc(res.lead_id)} отправлена</h3>
         <p>Менеджер позвонит на ${UI.esc(phone)}. А пока можно продолжить разговор здесь.</p>
         ${res.summary ? `<details><summary>Что увидит менеджер</summary>
           <div class="lead-done__summary">${UI.miniMarkdown(res.summary)}</div></details>` : ""}
@@ -617,19 +731,169 @@ const Chat = (() => {
     return `+7 ${d.slice(0, 3)} ${d.slice(3, 6)}-${d.slice(6, 8)}-${d.slice(8)}`;
   }
 
-  // ---------- Меню «⋯» (видно только на телефоне) ----------
+  // ---------- Слева: «Ваши диалоги» ----------
 
-  function toggleMenu() {
-    const open = el.moreBtn.getAttribute("aria-expanded") !== "true";
-    el.moreBtn.setAttribute("aria-expanded", String(open));
-    el.menu.classList.toggle("is-open", open);
-    if (open) (DEBUG_ALLOWED ? el.debug : el.newBtn).focus();
+  // Список прошлых диалогов вошедшего клиента. Общий GET /api/sessions здесь не используем:
+  // в нём разговоры всех клиентов. Гость видит подсказку, как получить свой список
+  async function loadDialogs() {
+    const seq = ++dialogsSeq; // запросы могут вернуться не по порядку — показываем только последний
+    if (!state.profile) {
+      state.dialogs = [];
+      state.dialogsError = false;
+    } else {
+      try {
+        const list = await Api.mySessions();
+        if (seq !== dialogsSeq) return;
+        state.dialogs = list;
+        state.dialogsError = false;
+      } catch {
+        if (seq !== dialogsSeq) return;
+        state.dialogsError = true; // старый список оставляем, под ним — «Повторить»
+      }
+    }
+    renderDialogs();
   }
 
-  function closeMenu() {
-    if (el.moreBtn.getAttribute("aria-expanded") !== "true") return false;
-    el.moreBtn.setAttribute("aria-expanded", "false");
-    el.menu.classList.remove("is-open");
+  function renderDialogs() {
+    // Список перерисовывается после каждого ответа: возвращаем фокус клавиатуры на тот же пункт
+    const focusedId = el.dialogsList.contains(document.activeElement) ? document.activeElement.dataset.id : null;
+    const items = [...state.dialogs];
+    // Текущий разговор уже идёт, а в списке с сервера его ещё нет (первый ответ в пути, гость) — показываем сверху
+    const firstAsk = el.feed.querySelector(".msg--user .msg__bubble");
+    if (state.sessionId && firstAsk && !items.some((d) => d.session_id === state.sessionId)) {
+      items.unshift({ session_id: state.sessionId, updated_at: new Date().toISOString(), lead_id: state.leadId, preview: firstAsk.textContent });
+    }
+    el.dialogsList.replaceChildren(...items.map(dialogItem));
+    if (focusedId) {
+      const again = [...el.dialogsList.querySelectorAll(".dialog")].find((b) => b.dataset.id === focusedId);
+      if (again) again.focus({ preventScroll: true });
+    }
+
+    // Подсказка под списком: ошибка, гость или пока пусто
+    let hint = "";
+    if (state.dialogsError) {
+      hint = `Не удалось загрузить прошлые диалоги.<br><button type="button" class="link-btn" data-act="reload">${UI.icon("retry")} Повторить</button>`;
+    } else if (!state.profile) {
+      hint = "Войдите на сайт по номеру телефона — здесь появятся ваши прошлые диалоги.";
+    } else if (!items.length) {
+      hint = "Здесь появятся ваши диалоги с консультантом.";
+    }
+    el.dialogsHint.hidden = !hint;
+    el.dialogsHint.innerHTML = hint;
+    updateDialogsLock();
+    updateListEdge();
+  }
+
+  // Нижний край списка растворяется, пока ниже есть ещё диалоги (класс .is-overflow в chat.css)
+  function updateListEdge() {
+    const l = el.dialogsList;
+    l.classList.toggle("is-overflow", l.scrollTop + l.clientHeight < l.scrollHeight - 2);
+  }
+
+  // Пункт списка: первый вопрос диалога, дата и номер заявки, если она есть
+  function dialogItem(d) {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "dialog";
+    b.dataset.id = d.session_id;
+    if (d.session_id === state.sessionId) b.setAttribute("aria-current", "true");
+    const lead = d.lead_id ? ` · <span class="dialog__lead">заявка №${UI.esc(d.lead_id)}</span>` : "";
+    b.innerHTML = `<span class="dialog__title">${UI.esc(d.preview || "Диалог без вопросов")}</span>
+      <span class="dialog__meta">${UI.dateTime(d.updated_at || d.created_at)}${lead}</span>`;
+    b.addEventListener("click", () => openDialog(d.session_id));
+    li.append(b);
+    return li;
+  }
+
+  // Открыть прошлый диалог: лента заменяется его историей, разговор можно продолжить
+  async function openDialog(id) {
+    // Пока консультант отвечает (здесь или в прошлом разговоре после «Нового диалога»), диалог не переключаем:
+    // ответ потерялся бы на экране, а «Повторить» записал бы вопрос на сервере второй раз.
+    // Пункты списка в это время приглушены; после попытки под заголовком появляется пояснение.
+    // Проверка — до закрытия выехавшего списка, иначе на узком экране пояснение спряталось бы вместе с ним
+    if (id !== state.sessionId && answerPending()) {
+      el.dialogsBusy.hidden = false;
+      announce("Другие диалоги откроются, когда консультант ответит");
+      return;
+    }
+    closeDrawer();
+    if (id === state.sessionId) { el.input.focus({ preventScroll: true }); return; }
+    const epoch = ++state.epoch; // ответы и история прошлых нажатий в эту ленту уже не попадут
+    dropUndo();
+    state.leadId = null;
+    state.leadDeclined = false;
+    setSession(id);
+    const loading = document.createElement("p");
+    loading.className = "note";
+    loading.textContent = "Загружаем диалог…";
+    el.feed.replaceChildren(loading);
+    rebuildOutline();
+    renderDialogs();
+
+    const ok = await restore(id);
+    if (epoch !== state.epoch) return; // пока грузили, клиент открыл ещё один диалог
+    loading.remove();
+    if (ok) {
+      announce("Открыт прошлый диалог");
+    } else {
+      setSession(null);
+      greet();
+      addNote("Не получилось открыть этот диалог. Начали новый.");
+    }
+    rebuildOutline();
+    renderDialogs();
+    el.input.focus({ preventScroll: true });
+  }
+
+  // ---------- Справа: оглавление разговора ----------
+
+  // Пункты — вопросы клиента в ленте. Перестраиваем целиком: вопросов немного
+  function rebuildOutline() {
+    const asks = [...el.feed.querySelectorAll(".msg--user")];
+    el.outlineList.replaceChildren(...asks.map((msg) => {
+      const li = document.createElement("li");
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "outline__item";
+      b.dataset.target = msg.id;
+      b.innerHTML = `<span>${UI.esc(msg.textContent.trim())}</span>`;
+      li.append(b);
+      return li;
+    }));
+    el.outline.hidden = !asks.length;
+    markOutline();
+  }
+
+  // Подсветить вопрос, до которого дочитали: последний, чей верх уже выше 40 % высоты ленты
+  function markOutline() {
+    const items = [...el.outlineList.querySelectorAll(".outline__item")];
+    if (!items.length || outlinePinned) return; // идёт прокрутка к нажатому вопросу — его подсветку не трогаем
+    const box = el.scroll.getBoundingClientRect();
+    const line = box.top + box.height * 0.4;
+    let current = items[0];
+    for (const b of items) {
+      const msg = document.getElementById(b.dataset.target);
+      if (msg && msg.getBoundingClientRect().top <= line) current = b;
+    }
+    // Долистали до конца — подсвечиваем последний вопрос, даже если он ниже линии
+    if (el.scroll.scrollTop + el.scroll.clientHeight >= el.scroll.scrollHeight - 4) current = items[items.length - 1];
+    items.forEach((b) => (b === current ? b.setAttribute("aria-current", "true") : b.removeAttribute("aria-current")));
+  }
+
+  // ---------- Левая колонка на узком экране: выезжает по кнопке в шапке ----------
+
+  function toggleDrawer(open) {
+    el.dialogs.classList.toggle("is-open", open);
+    el.backdrop.hidden = !open;
+    el.dialogsBtn.setAttribute("aria-expanded", String(open));
+    el.main.inert = open; // пока список выехал, Tab не уходит в разговор под затемнением
+    if (open) (el.dialogs.querySelector('[aria-current="true"]') || el.newBtn).focus();
+  }
+
+  function closeDrawer() {
+    if (!el.dialogs.classList.contains("is-open")) return false;
+    toggleDrawer(false);
     return true;
   }
 
@@ -672,17 +936,51 @@ const Chat = (() => {
   el.newBtn.addEventListener("click", newDialog);
   el.leadBtn.addEventListener("click", showLeadForm);
   el.closeBtn.addEventListener("click", close);
-  el.moreBtn.addEventListener("click", toggleMenu);
+  el.dialogsBtn.addEventListener("click", () => toggleDrawer(!el.dialogs.classList.contains("is-open")));
+  el.backdrop.addEventListener("click", closeDrawer);
+  // Экран стал шире (повернули планшет) — левая колонка снова на месте, выезжающий режим выключаем
+  matchMedia("(min-width: 900px)").addEventListener("change", (e) => { if (e.matches) closeDrawer(); });
+  // «Повторить» под списком, если он не загрузился
+  el.dialogsHint.addEventListener("click", async (e) => {
+    if (!e.target.closest('[data-act="reload"]')) return;
+    await loadDialogs();
+    // Кнопка «Повторить» исчезла вместе с подсказкой — фокус на первый диалог, а не в никуда.
+    // Только если клиент за это время не ушёл в другое место (например, в поле ввода)
+    if (document.activeElement === document.body) (el.dialogsList.querySelector(".dialog") || el.newBtn).focus();
+  });
+  el.dialogsList.addEventListener("scroll", updateListEdge, { passive: true });
+  // Высота списка меняется и без перерисовки: открыли чат, появилось пояснение, повернули экран
+  new ResizeObserver(updateListEdge).observe(el.dialogsList);
 
-  // Esc: сначала закрывает меню, потом сам чат
+  // Оглавление: прокрутка к вопросу и подсветка того, до которого дочитали
+  el.outlineList.addEventListener("click", (e) => {
+    const b = e.target.closest(".outline__item");
+    const msg = b && document.getElementById(b.dataset.target);
+    if (!msg) return;
+    const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    msg.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+    // Нажатый пункт подсвечиваем сразу и держим, пока идёт прокрутка
+    // (иначе у конца ленты подсветка прыгнула бы на последний вопрос)
+    el.outlineList.querySelectorAll(".outline__item").forEach((x) =>
+      (x === b ? x.setAttribute("aria-current", "true") : x.removeAttribute("aria-current")));
+    // Удержание снимается, когда прокрутка закончилась (scrollend); таймер — на случай, если прокрутки не было
+    outlinePinned = b;
+    clearTimeout(pinTimer);
+    pinTimer = setTimeout(() => { outlinePinned = null; }, 1500);
+    // Короткая подсветка самого вопроса — видно, куда привело нажатие, даже если лента не сдвинулась
+    msg.classList.remove("msg--flash");
+    void msg.offsetWidth; // перезапуск анимации при повторном нажатии
+    msg.classList.add("msg--flash");
+    msg.addEventListener("animationend", () => msg.classList.remove("msg--flash"), { once: true });
+  });
+  el.scroll.addEventListener("scroll", () => requestAnimationFrame(markOutline), { passive: true });
+  el.scroll.addEventListener("scrollend", () => { outlinePinned = null; clearTimeout(pinTimer); });
+
+  // Esc: сначала закрывает выехавший список диалогов, потом сам чат
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || el.root.hidden) return;
-    if (closeMenu()) { el.moreBtn.focus(); return; }
+    if (closeDrawer()) { el.dialogsBtn.focus(); return; }
     close();
-  });
-  // Клик мимо меню — закрыть его
-  document.addEventListener("click", (e) => {
-    if (!el.menu.contains(e.target) && !el.moreBtn.contains(e.target)) closeMenu();
   });
 
   el.root.addEventListener("transitionend", (e) => {
