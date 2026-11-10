@@ -41,21 +41,12 @@ def parse_dialog(text: str) -> list[dict]:
 
 
 def search_queries(messages: list[dict]) -> list[str]:
-    """Запросы к базе: в диалоге последняя реплика часто не содержит названия продукта («Таких данных хватит?»),
-    поэтому склеиваем её с первой репликой клиента, где названа исходная задача."""
+    """Запросы к базе: последняя реплика клиента и (для диалога) весь диалог — реплики ассистента
+    часто называют продукт, о котором идёт речь («сервис для выездных проверок»)."""
     users = [m["content"] for m in messages if m["role"] == "user"]
-    if not users:
-        return [messages[-1]["content"]] if messages else [""]
-    last = users[-1]
-    first_and_last = f"{users[0]} {last}" if len(users) > 1 else last
-    all_users = " ".join(users)
-
-    queries = []
-    # first_and_last идёт последним, так как retrieve() передаёт в реранкер queries[-1]
-    for q in (last, all_users, first_and_last):
-        if q and q not in queries:
-            queries.append(q)
-    return queries
+    last = users[-1] if users else ""
+    full = " ".join(m["content"] for m in messages)
+    return [last] if full == last else [last, full]
 
 
 def clean_answer(text: str) -> str:
