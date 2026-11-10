@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>EnergyTool — ИИ-консультант</title>
+  <!-- Шрифт Manrope — открытый аналог фирменного. TODO: положить файлы шрифта в проект, чтобы не зависеть от Google -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/site.css">
+  <link rel="stylesheet" href="css/chat.css">
+</head>
+<body>
+
+  <!-- ===================== Страница-заглушка сайта ===================== -->
+  <header class="site-header">
+    <div class="site-header__inner">
+      <a class="wordmark" href="#top" aria-label="EnergyTool, наверх">
+        <span class="brand-mark" data-icon="bolt"></span>
+        <span>Energy<span class="wordmark__accent">Tool</span></span>
+      </a>
+      <nav class="site-nav" aria-label="Разделы сайта">
+        <a href="#solutions">Решения</a>
+        <a href="#how">Как мы работаем</a>
+        <a href="#contacts">Контакты</a>
+      </nav>
+      <!-- Кнопка чата в шапке: главный вход в консультанта -->
+      <button class="btn btn-primary" type="button" data-open-chat>
+        <span data-icon="chat"></span>
+        <span class="hide-narrow">Спросить консультанта</span>
+        <span class="show-narrow">Чат</span>
+        <span class="badge-new">Новое</span>
+      </button>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="hero__text">
+        <h1>Подберём решение для&nbsp;энергетики вашего бизнеса</h1>
+        <p class="hero__lead">
+          Расскажите о задаче своими словами. ИИ-консультант задаст пару вопросов,
+          подскажет подходящее решение и передаст заявку менеджеру — без длинных форм.
+        </p>
+        <div class="hero__actions">
+          <!-- «Оставить заявку» открывает тот же чат: чат вместо формы -->
+          <button class="btn btn-primary btn-lg" type="button" data-open-chat="lead">Оставить заявку</button>
+          <button class="btn btn-secondary btn-lg" type="button" data-open-chat>Задать вопрос</button>
+        </div>
+      </div>
+      <!-- Справа — пример диалога, чтобы было понятно, что внутри -->
+      <!-- Пример диалога — тоже вход в чат: по клику открывается настоящий -->
+      <button class="hero__preview" type="button" data-open-chat aria-label="Открыть чат с консультантом">
+        <span class="preview-bubble preview-bubble--user" aria-hidden="true">Счёт за свет вырос, а потребление то же. Почему?</span>
+        <span class="preview-bubble" aria-hidden="true">Разберёмся. Уточните: это офис, магазин или производство?</span>
+        <span class="preview-bubble preview-bubble--user" aria-hidden="true">Производство, два цеха</span>
+        <span class="preview-typing" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="hero__preview-cta" aria-hidden="true">Продолжить в чате <i data-icon="arrow"></i></span>
+      </button>
+    </section>
+
+    <section class="solutions" id="solutions">
+      <h2>С чем помогает консультант</h2>
+      <!-- Каждая строка открывает чат и сразу задаёт вопрос по направлению -->
+      <ul class="solution-list">
+        <li><button type="button" data-ask="Как выйти на оптовый рынок электроэнергии и что для этого нужно?">
+          <strong>Выход на оптовый рынок</strong><span>Когда покупать электроэнергию напрямую выгоднее</span><em>Спросить <i data-icon="arrow"></i></em></button></li>
+        <li><button type="button" data-ask="У нас несколько объектов. Можно смотреть их расход в одном кабинете?">
+          <strong>Облачная платформа учёта</strong><span>Показания всех объектов в одном кабинете</span><em>Спросить <i data-icon="arrow"></i></em></button></li>
+        <li><button type="button" data-ask="Хотим поставить солнечную станцию на предприятии. С чего начать?">
+          <strong>Солнечные станции</strong><span>Сетевые и гибридные, с накопителями</span><em>Спросить <i data-icon="arrow"></i></em></button></li>
+        <li><button type="button" data-ask="В нашей сети большие потери. Как найти, где теряется электроэнергия?">
+          <strong>Поиск коммерческих потерь</strong><span>Для сетевых организаций и СНТ</span><em>Спросить <i data-icon="arrow"></i></em></button></li>
+        <li><button type="button" data-ask="Можно ли передавать показания счётчиков по фото?">
+          <strong>Показания по фото</strong><span>Распознавание показаний счётчиков</span><em>Спросить <i data-icon="arrow"></i></em></button></li>
+        <li><button type="button" data-ask="Почему вырос счёт за электроэнергию, хотя потребление не изменилось?">
+          <strong>Вырос счёт за электроэнергию</strong><span>Ценовые категории, пиковые часы, мощность</span><em>Спросить <i data-icon="arrow"></i></em></button></li>
+      </ul>
+    </section>
+
+    <section class="how" id="how">
+      <h2>Как мы работаем</h2>
+      <ol class="how__steps">
+        <li><strong>Вы описываете задачу</strong><span>Своими словами, без терминов</span></li>
+        <li><strong>Консультант уточняет и советует</strong><span>Только по материалам EnergyTool</span></li>
+        <li><strong>Менеджер звонит</strong><span>Уже зная суть, без повторных вопросов</span></li>
+      </ol>
+    </section>
+  </main>
+
+  <footer class="site-footer" id="contacts">
+    <p>Учебный проект для хакатона True Tech Hack&amp;Change 2026. Не официальный сайт МТС.</p>
+    <a href="manager.html">Панель менеджера</a>
+  </footer>
+
+  <!-- ===================== Чат на весь экран ===================== -->
+  <div class="chat" id="chat" role="dialog" aria-modal="true" aria-labelledby="chat-title" hidden>
+    <header class="chat__header">
+      <div class="chat__title">
+        <span class="chat__avatar" data-icon="bolt"></span>
+        <div>
+          <h2 id="chat-title">Консультант EnergyTool</h2>
+          <p class="chat__subtitle" id="chat-status">ИИ-помощник · отвечает по материалам компании</p>
+        </div>
+      </div>
+      <div class="chat__tools">
+        <!-- Второстепенные действия. На компьютере видны в строку,
+             на телефоне прячутся в меню «⋯» (раскрывает chat.js) -->
+        <button class="btn btn-ghost btn-icon chat__more" type="button" id="more-btn"
+                aria-label="Ещё действия" aria-expanded="false" aria-controls="chat-menu">
+          <span data-icon="more"></span>
+        </button>
+        <div class="chat__menu" id="chat-menu">
+          <!-- Режим проверки для жюри: виден только при открытии страницы с ?debug=1 -->
+          <label class="switch" id="debug-switch" hidden>
+            <input type="checkbox" id="debug-toggle">
+            <span class="switch__track" aria-hidden="true"></span>
+            <span class="switch__label">Режим проверки</span>
+          </label>
+          <button class="btn btn-ghost" type="button" id="new-chat-btn">
+            <span data-icon="plus"></span>Новый диалог
+          </button>
+        </div>
+        <!-- Главное действие кейса — всегда с текстом, на телефоне короче -->
+        <button class="btn btn-secondary" type="button" id="lead-btn">
+          <span data-icon="user"></span><span class="hide-narrow">Оставить заявку</span><span class="show-narrow">Заявка</span>
+        </button>
+        <button class="btn btn-ghost btn-icon" type="button" id="close-chat-btn" aria-label="Закрыть чат">
+          <span data-icon="close"></span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Лента сообщений -->
+    <div class="chat__scroll" id="chat-scroll">
+      <div class="chat__feed" id="chat-feed"></div>
+    </div>
+    <!-- Скрытая область: сюда chat.js пишет ответы бота, ошибки и итог заявки,
+         чтобы экранная читалка проговаривала только их, а не каждую кнопку -->
+    <p class="sr-only" id="chat-announcer" aria-live="polite"></p>
+
+    <form class="composer" id="composer">
+      <div class="composer__box">
+        <label class="sr-only" for="composer-input">Ваше сообщение</label>
+        <textarea id="composer-input" rows="1" maxlength="2000" aria-describedby="composer-count"
+                  placeholder="Опишите задачу своими словами"></textarea>
+        <button class="btn btn-primary btn-icon composer__send" type="submit" aria-label="Отправить" disabled>
+          <span data-icon="send"></span>
+        </button>
+      </div>
+      <p class="composer__note">
+        <span>ИИ может ошибаться. Точные условия и расчёт подтвердит менеджер.</span>
+        <!-- Появляется ближе к лимиту в 2000 символов -->
+        <span class="composer__count" id="composer-count" hidden></span>
+      </p>
+    </form>
+  </div>
+
+  <!-- Порядок важен: заглушка → API → помощники → сайт и чат -->
+  <script src="js/mock.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/chat.js"></script>
+  <script src="js/site.js"></script>
+  <script src="js/sketch.js"></script>
+</body>
+</html>

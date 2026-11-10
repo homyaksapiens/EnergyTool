@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Панель менеджера — EnergyTool</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/chat.css">   <!-- пузыри сообщений и блок отладки — те же, что в чате -->
+  <link rel="stylesheet" href="css/manager.css">
+</head>
+<body class="manager">
+
+  <header class="mgr-header">
+    <a class="mgr-brand" href="index.html">
+      <span class="brand-mark" data-icon="bolt"></span>
+      <span><strong>EnergyTool</strong><small>Панель менеджера</small></span>
+    </a>
+    <!-- Вкладки: заявки и история всех диалогов (в том числе без заявки) -->
+    <nav class="tabs" role="tablist" aria-label="Разделы панели">
+      <button role="tab" id="tab-leads" aria-selected="true" data-tab="leads">Заявки <span class="tabs__count" id="count-leads"></span></button>
+      <button role="tab" id="tab-sessions" aria-selected="false" data-tab="sessions">Все диалоги <span class="tabs__count" id="count-sessions"></span></button>
+    </nav>
+    <button class="btn btn-ghost" type="button" id="refresh-btn" aria-label="Обновить"><span data-icon="retry"></span><span class="hide-narrow">Обновить</span></button>
+  </header>
+
+  <main class="mgr-layout" id="layout">
+    <!-- Слева список, справа карточка выбранной заявки или диалога -->
+    <section class="mgr-list" aria-label="Список">
+      <div class="filters" id="filters" role="group" aria-label="Фильтр по статусу"></div>
+      <ul class="items" id="items"></ul>
+    </section>
+    <section class="mgr-detail" id="detail" aria-live="polite">
+      <div class="empty">
+        <p>Выберите заявку или диалог слева.</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/mock.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/manager.js"></script>
+</body>
+</html>

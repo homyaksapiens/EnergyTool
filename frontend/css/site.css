@@ -1,0 +1,139 @@
+/* site.css — страница-заглушка сайта EnergyTool. */
+
+/* ---------- Шапка ---------- */
+.site-header {
+  position: sticky; top: 0; z-index: 10;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: saturate(1.4) blur(12px);
+  box-shadow: var(--shadow-header);
+}
+.site-header__inner {
+  max-width: 1200px; margin: 0 auto;
+  display: flex; align-items: center; gap: 32px;
+  padding: 12px 24px;
+}
+.wordmark {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-weight: 800; font-size: 20px; letter-spacing: -0.03em;
+  color: var(--text); text-decoration: none;
+}
+.wordmark__accent { color: var(--accent); }
+
+.site-nav { display: flex; gap: 24px; margin-right: auto; }
+.site-nav a { color: var(--muted); font-weight: 600; text-decoration: none; }
+.site-nav a:hover { color: var(--text); }
+
+/* Наклейка «Новое» на кнопке чата. Розовый — только для особых объектов; текст на нём тёмный (7,3) */
+.site-header [data-open-chat] { position: relative; }
+.badge-new {
+  position: absolute; top: -9px; right: -8px;
+  padding: 3px 8px; border-radius: 999px;
+  background: var(--pink); color: var(--text);
+  font-size: 11px; font-weight: 800; line-height: 1.2;
+  box-shadow: 0 2px 6px rgba(29, 32, 35, 0.15);
+  pointer-events: none;
+}
+
+/* ---------- Первый экран ---------- */
+main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+.hero {
+  display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 48px; align-items: center;
+  background: var(--card); border-radius: var(--r-xl);
+  padding: clamp(32px, 6vw, 72px);
+  box-shadow: var(--shadow);
+}
+.hero h1 { font-size: clamp(34px, 5vw, 60px); font-weight: 800; letter-spacing: -0.035em; }
+.hero__lead { margin-top: 20px; max-width: 54ch; font-size: 18px; color: var(--muted); }
+.hero__actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+.btn-lg { min-height: 52px; padding: 14px 28px; font-size: 16px; }
+
+/* Пример диалога справа */
+/* Пример диалога — кнопка: по клику открывается настоящий чат */
+.hero__preview {
+  display: flex; flex-direction: column; gap: 10px; align-items: flex-start;
+  width: 100%; padding: 28px; border: 0; border-radius: var(--r-lg);
+  background: var(--card); box-shadow: var(--shadow); text-align: left; cursor: pointer;
+  transition: box-shadow 0.25s var(--ease-out), transform 0.25s var(--ease-out);
+}
+.hero__preview:hover { box-shadow: var(--shadow-lift); transform: translateY(-2px); }
+.hero__preview-cta {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 6px;
+  font-weight: 700; color: var(--link);
+}
+.hero__preview-cta .icon { width: 18px; height: 18px; transition: transform 0.2s var(--ease-out); }
+.hero__preview:hover .hero__preview-cta .icon { transform: translateX(4px); }
+.preview-bubble {
+  display: block; max-width: 85%; padding: 12px 16px; border-radius: 20px 20px 20px 6px;
+  background: var(--card); box-shadow: var(--shadow-widget); font-size: 15px;
+}
+.preview-bubble--user {
+  align-self: flex-end; display: block; border-radius: 20px 20px 6px 20px;
+  background: var(--user-bubble); color: var(--user-bubble-text); box-shadow: none;
+}
+.preview-typing { display: flex; gap: 5px; padding: 14px 16px; background: var(--card); box-shadow: var(--shadow-widget); border-radius: 20px; width: max-content; }
+.preview-typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); animation: dot 1.2s infinite ease-in-out; }
+.preview-typing i:nth-child(2) { animation-delay: 0.15s; }
+.preview-typing i:nth-child(3) { animation-delay: 0.3s; }
+
+/* ---------- Направления: строки-кнопки, каждая открывает чат с вопросом ---------- */
+.solutions, .how { margin-top: 24px; background: var(--card); border-radius: var(--r-xl); padding: clamp(28px, 5vw, 56px); box-shadow: var(--shadow); }
+.solutions h2, .how h2 { font-size: clamp(26px, 3vw, 36px); font-weight: 800; margin-bottom: 24px; }
+
+.solution-list { list-style: none; margin: 0; padding: 0; }
+.solution-list li + li { border-top: 1px solid var(--line); }
+.solution-list button {
+  width: 100%; display: grid; grid-template-columns: minmax(220px, 300px) 1fr auto; gap: 24px; align-items: center;
+  padding: 20px 8px; border: 0; background: none; text-align: left; cursor: pointer;
+  border-radius: var(--r-md);
+  transition: background-color 0.15s, box-shadow 0.15s;
+}
+.solution-list button:hover { background: var(--soft); box-shadow: var(--shadow-widget); }
+.solution-list strong { font-size: 19px; font-weight: 700; }
+.solution-list span { color: var(--muted); }
+.solution-list em {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-style: normal; font-weight: 700; font-size: 15px; color: var(--link);
+}
+.solution-list .icon { width: 18px; height: 18px; color: var(--accent); transition: transform 0.2s var(--ease-out); }
+.solution-list button:hover .icon { transform: translateX(4px); }
+
+/* ---------- Как мы работаем: последовательность шагов ---------- */
+.how__steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; counter-reset: step; }
+.how__steps li { counter-increment: step; display: flex; flex-direction: column; gap: 6px; }
+.how__steps li::before {
+  content: counter(step);
+  display: grid; place-items: center; width: 40px; height: 40px; margin-bottom: 8px;
+  border-radius: 50%; background: var(--soft); color: var(--accent); font-weight: 800;
+  box-shadow: var(--shadow-widget);
+}
+.how__steps strong { font-size: 18px; }
+.how__steps span { color: var(--muted); }
+
+/* ---------- Подвал ---------- */
+.site-footer {
+  max-width: 1200px; margin: 0 auto; padding: 24px 24px 48px;
+  display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  color: var(--muted); font-size: 14px;
+}
+
+/* ---------- Телефон ---------- */
+@media (max-width: 860px) {
+  .site-nav { display: none; }
+  .site-header__inner { justify-content: space-between; }
+  .hero { grid-template-columns: 1fr; gap: 32px; }
+  .solution-list button { grid-template-columns: 1fr auto; gap: 4px 16px; }
+  .solution-list span { grid-column: 1; }
+  .solution-list em { grid-row: 1 / span 2; grid-column: 2; font-size: 0; gap: 0; } /* на узком экране — только стрелка */
+  .how__steps { grid-template-columns: 1fr; gap: 20px; }
+}
+@media (max-width: 520px) {
+  main { padding: 12px; }
+  .hero__preview { display: none; }
+  .hero__actions .btn { flex: 1; }
+}
+
+@keyframes dot {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+  40% { transform: translateY(-4px); opacity: 1; }
+}
