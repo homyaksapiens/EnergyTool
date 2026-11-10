@@ -1,7 +1,11 @@
 """База знаний: загрузка из zip, разбор pandoc-таблиц, нарезка по заголовкам, гибридный поиск.
 
 Поиск — BM25 (всегда) + эмбеддинги bge-m3 (если эмбеддер доступен), списки объединяются через RRF.
+
+Распаковывает архив knowledge-base.zip, превращает таблицы в удобный текст, режет файлы по заголовкам ## на кусочки (чанки)
+и ищет по ним двумя способами: по ключевым словам (BM25) и по смыслу через эмбеддинги (bge-m3).
 """
+
 from __future__ import annotations
 
 import math
@@ -175,12 +179,17 @@ SUFFIXES = sorted(set("""ами ями ого его ому ему ыми ими
 
 
 def stem(word: str) -> str:
-    """Грубый стемминг для русского: срезаем окончание и ограничиваем длину основы."""
-    if len(word) <= 4 or word.isdigit():
+    """Грубый стемминг для русского: срезаем окончание (а для разговорных -ка/-ки — и суффикс к)."""
+    if len(word) <= 3 or word.isdigit():
         return word
     for suffix in SUFFIXES:
-        if word.endswith(suffix) and len(word) - len(suffix) >= 4:
-            return word[:-len(suffix)][:7]
+        min_root = 3 if suffix in ("а", "и", "у", "е", "ой", "ами", "ах") else 4
+        if word.endswith(suffix) and len(word) - len(suffix) >= min_root:
+            base = word[:-len(suffix)][:7]
+            # Разговорный суффикс -к- в коротких словах (сим-к-и -> сим, фот-к-а -> фот)
+            if len(base) == 4 and base.endswith("к"):
+                return base[:-1]
+            return base
     return word[:7]
 
 

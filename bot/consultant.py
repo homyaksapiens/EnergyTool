@@ -2,6 +2,9 @@
 
 Используется и в solution.py (автосабмит), и в веб-бэкенде. Tool calling не используем: прокси
 платформы его не гарантирует, а лишние вызовы LLM съедают лимит времени.
+
+Берет вопрос клиента, ищет подходящие куски текста через kb.py, пропускает их через реранкер (если он доступен),
+подставляет в шаблон промпта и отправляет в языковую модель.
 """
 from __future__ import annotations
 
@@ -38,12 +41,21 @@ def parse_dialog(text: str) -> list[dict]:
 
 
 def search_queries(messages: list[dict]) -> list[str]:
-    """Запросы к базе: последняя реплика клиента и (для диалога) весь диалог — реплики ассистента
-    часто называют продукт, о котором идёт речь («сервис для выездных проверок»)."""
+    """Запросы к базе: в диалоге последняя реплика часто не содержит названия продукта («Таких данных хватит?»),
+    поэтому склеиваем её с первой репликой клиента, где названа исходная задача."""
     users = [m["content"] for m in messages if m["role"] == "user"]
-    last = users[-1] if users else ""
+    if not users:
+        return [messages[-1]["content"]] if messages else [""]
+    last = users[-1]
+    first_and_last = f"{users[0]} {last}" if len(users) > 1 else last
+    all_users = " ".join(users)
     full = " ".join(m["content"] for m in messages)
-    return [last] if full == last else [last, full]
+
+    queries = []
+    for q in (first_and_last, all_users, full):
+        if q and q not in queries:
+            queries.append(q)
+    return queries
 
 
 def clean_answer(text: str) -> str:
