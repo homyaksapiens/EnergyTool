@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Шаблон 1 · Страница-разговор · EnergyTool</title>
+<!-- Шаблон 1 «Страница-разговор». Статичный макет: кнопки ничего не делают.
+     Идея: сайт и чат — одна лента. Разделы сайта написаны как реплики консультанта,
+     поле ввода всегда прижато к низу экрана, отдельного «открыть чат» нет. -->
+<style>
+  :root {
+    --red: #cf2e2e;
+    --red-dark: #b32626;
+    --white: #ffffff;
+    --pink: #f78da7;
+    --text: #1d2023;
+    --muted: #626c77;
+    --faint: #969fa8;
+    --gray: #f2f3f7;
+    --line: #e2e5eb;
+    --control: #868f98;
+    --font: Arial, "Helvetica Neue", Helvetica, sans-serif;
+    --shadow: 0 8px 30px rgba(29, 32, 35, 0.10);
+    --shadow-float: 0 10px 36px rgba(29, 32, 35, 0.16);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scrollbar-color: var(--faint) transparent; scrollbar-width: thin; }
+  body {
+    margin: 0; font-family: var(--font); font-size: 17px; line-height: 1.5;
+    color: var(--text); background: var(--white);
+    font-variant-numeric: tabular-nums; caret-color: var(--red); accent-color: var(--red);
+  }
+  h1, h2, h3, p { margin: 0; }
+  h1, h2 { line-height: 1.06; letter-spacing: -0.03em; text-wrap: balance; }
+  a { color: var(--red); text-underline-offset: 3px; }
+  button, input, textarea { font: inherit; color: inherit; }
+  ::selection { background: var(--red); color: var(--white); }
+  :focus-visible { outline: 3px solid var(--text); outline-offset: 2px; border-radius: 6px; }
+  .icon { width: 20px; height: 20px; flex: none; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .icon--fill { fill: currentColor; stroke-width: 1.5; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  /* ---------- Кнопки ---------- */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    min-height: 44px; padding: 0 22px; border: 0; border-radius: 999px;
+    font-weight: 700; font-size: 15px; line-height: 1.2; text-decoration: none; white-space: nowrap; cursor: pointer;
+    transition: background-color .15s, color .15s, box-shadow .15s;
+  }
+  .btn--red { background: var(--red); color: var(--white); }
+  .btn--red:hover { background: var(--red-dark); }
+  .btn--line { background: var(--white); color: var(--red); box-shadow: inset 0 0 0 2px var(--red); }
+  .btn--line:hover { background: var(--red); color: var(--white); }
+  .btn--ghost { background: transparent; color: var(--text); }
+  .btn--ghost:hover { background: var(--gray); }
+
+  /* ---------- Шапка ---------- */
+  .top { position: sticky; top: 0; z-index: 10; background: var(--white); border-bottom: 1px solid var(--line); }
+  .top__in { max-width: 1240px; margin: 0 auto; padding: 12px 32px; display: flex; align-items: center; gap: 44px; }
+  .wordmark { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 21px; letter-spacing: -0.03em; color: var(--text); text-decoration: none; }
+  .mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--red); color: var(--white); }
+  .mark .icon { width: 18px; height: 18px; }
+  .nav { display: flex; gap: 28px; margin-right: auto; }
+  .nav a { color: var(--muted); font-weight: 700; font-size: 15px; text-decoration: none; }
+  .nav a:hover { color: var(--text); }
+
+  /* ---------- Лента: три колонки — кто говорит слева, текст, «Вы» справа ---------- */
+  .talk { max-width: 1240px; margin: 0 auto; padding: 0 32px; }
+  .turn { display: grid; grid-template-columns: 190px minmax(0, 800px) 1fr; column-gap: 40px; }
+  .turn + .turn { margin-top: 24px; }
+  .talk > .turn--you { margin-top: 80px; } /* новый обмен репликами — шире */
+  .who { grid-column: 1; display: flex; gap: 12px; align-items: flex-start; padding-top: 6px; font-size: 15px; font-weight: 700; line-height: 1.3; }
+  .who small { display: block; margin-top: 2px; font-size: 14px; font-weight: 400; color: var(--muted); }
+  .avatar { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: 50%; background: var(--text); color: var(--white); }
+  .avatar .icon { width: 18px; height: 18px; color: var(--red); }
+  .say { grid-column: 2; }
+  .say > p + p { margin-top: 14px; }
+  .say p { max-width: 62ch; font-size: 19px; }
+  .say h2 { font-size: clamp(26px, 2.3vw, 32px); letter-spacing: -0.025em; }
+  .say h2 + p { margin-top: 10px; }
+
+  /* Реплика клиента: красный пузырь справа, подпись «Вы» в третьей колонке */
+  .turn--you .say { display: flex; justify-content: flex-end; }
+  .turn--you .who-you { grid-column: 3; padding-top: 14px; font-size: 15px; font-weight: 700; color: var(--muted); }
+  .bubble {
+    max-width: 560px; padding: 14px 20px; border-radius: 22px 22px 6px 22px;
+    background: var(--red); color: var(--white); font-size: 19px; line-height: 1.4;
+  }
+
+  /* Первый экран: приветствие консультанта — это и есть заголовок страницы */
+  .hero { padding-top: clamp(32px, 5vh, 56px); }
+  .hero h1 { font-size: clamp(36px, 3.9vw, 56px); }
+  .hero .lead { margin-top: 16px; max-width: none; font-size: 20px; color: var(--muted); }
+
+  /* Возможные ответы клиента: контур в форме пузыря. Сказанное — залито красным, ещё не сказанное — контур */
+  .replies { grid-column: 2; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin: 0; padding: 0; list-style: none; }
+  .reply {
+    display: inline-flex; align-items: center; min-height: 48px; padding: 12px 20px;
+    border: 0; border-radius: 22px 22px 6px 22px; background: var(--white); color: var(--red);
+    box-shadow: inset 0 0 0 2px var(--red); font-size: 17px; font-weight: 700; cursor: pointer; text-align: left;
+    transition: background-color .15s, color .15s;
+  }
+  .reply:hover { background: var(--red); color: var(--white); }
+
+  /* Направления внутри ответа консультанта: строки-ссылки, не карточки */
+  .topics { list-style: none; margin: 24px 0 0; padding: 0; border-top: 1px solid var(--line); }
+  .topics a {
+    display: grid; grid-template-columns: 290px 1fr auto; gap: 24px; align-items: baseline;
+    padding: 18px 0; border-bottom: 1px solid var(--line); color: var(--text); text-decoration: none;
+  }
+  .topics strong { font-size: 20px; letter-spacing: -0.01em; }
+  .topics span { color: var(--muted); }
+  .topics em { display: inline-flex; align-items: center; gap: 6px; font-style: normal; font-weight: 700; font-size: 15px; color: var(--red); }
+  .topics em .icon { width: 18px; height: 18px; transition: transform .2s cubic-bezier(.16, 1, .3, 1); }
+  .topics a:hover strong { color: var(--red); }
+  .topics a:hover em .icon { transform: translateX(4px); }
+
+  /* Шаги: порядок важен, поэтому номера */
+  .steps { list-style: none; margin: 24px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; counter-reset: s; }
+  .steps li { counter-increment: s; border-top: 1px solid var(--line); padding-top: 16px; }
+  .steps li::before { content: counter(s); display: block; font-size: 28px; font-weight: 700; line-height: 1; color: var(--text); letter-spacing: -0.04em; }
+  .steps strong { display: block; margin-top: 14px; font-size: 19px; }
+  .steps span { display: block; margin-top: 4px; color: var(--muted); }
+
+  /* Поле ввода прижато к низу экрана на всём сайте */
+  .composer { position: sticky; bottom: 0; z-index: 8; margin-top: 64px; padding: 20px 0 22px; background: var(--white); }
+  .composer .turn { margin: 0; }
+  .composer__box {
+    grid-column: 2; display: flex; align-items: center; gap: 12px;
+    padding: 8px 8px 8px 24px; border-radius: 999px; background: var(--white);
+    box-shadow: var(--shadow-float), 0 0 0 1px var(--line);
+  }
+  .composer__box input { flex: 1; min-width: 0; height: 48px; border: 0; outline: 0; background: none; font-size: 18px; }
+  .composer__box input::placeholder { color: var(--muted); }
+  .send { width: 48px; height: 48px; padding: 0; border-radius: 50%; }
+  .composer__note { grid-column: 2; margin-top: 8px; padding-left: 24px; font-size: 14px; color: var(--muted); }
+
+  .foot { max-width: 1240px; margin: 24px auto 0; padding: 24px 32px 40px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+
+  /* ---------- Пояснение к макету (не часть дизайна) ---------- */
+  .mock-note { background: var(--text); color: var(--white); }
+  .mock-note p { max-width: 1240px; margin: 0 auto; padding: 22px 32px; font-size: 15px; }
+
+  /* ---------- Экран 2: разговор идёт ---------- */
+  .screen { position: relative; padding-bottom: 150px; background: var(--white); }
+  .screen .talk { padding-top: 36px; }
+  .daybreak { display: grid; grid-template-columns: 190px minmax(0, 800px) 1fr; column-gap: 40px; margin-bottom: 36px; }
+  .daybreak span { grid-column: 2; display: flex; align-items: center; gap: 16px; font-size: 14px; font-weight: 700; color: var(--muted); }
+  .daybreak span::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .screen .turn + .turn { margin-top: 28px; }
+  .daybreak + .turn { margin-top: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .chips .reply { min-height: 40px; padding: 8px 16px; font-size: 15px; }
+  .say b { font-weight: 700; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+  .debug { display: inline-block; margin-top: 14px; padding: 6px 12px; border-radius: 8px; background: var(--gray); font-size: 13px; color: var(--muted); }
+  .debug b { color: var(--text); }
+
+  /* Карточка заявки — прямо в ленте */
+  .lead-card { max-width: 640px; margin-top: 18px; padding: 28px; border-radius: 24px; background: var(--white); box-shadow: var(--shadow), 0 0 0 1px var(--line); }
+  .lead-card h2 { font-size: 24px; letter-spacing: -0.02em; }
+  .summary { margin-top: 12px; padding: 14px 16px; border-radius: 14px; background: var(--gray); font-size: 15px; color: var(--muted); }
+  .summary b { color: var(--text); }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 20px; }
+  .field--wide { grid-column: 1 / -1; }
+  .field label { display: block; margin-bottom: 6px; font-size: 14px; font-weight: 700; }
+  .field input { width: 100%; height: 48px; padding: 0 16px; border: 1.5px solid var(--control); border-radius: 12px; background: var(--white); font-size: 16px; }
+  .field input::placeholder { color: var(--muted); }
+  .field input.is-focus { border-color: var(--red); box-shadow: 0 0 0 4px rgba(207, 46, 46, 0.16); }
+  .consent { display: flex; gap: 10px; align-items: flex-start; margin-top: 16px; font-size: 14px; color: var(--muted); }
+  .consent input { width: 20px; height: 20px; margin: 1px 0 0; flex: none; }
+  .lead-card .actions { margin-top: 20px; }
+
+  .screen .composer { position: absolute; left: 0; right: 0; bottom: 0; margin: 0; }
+  /* Варианты, на которые клиент уже ответил: приглушены, не нажимаются */
+  .chips--used .reply { color: var(--muted); box-shadow: inset 0 0 0 1.5px var(--line); cursor: default; }
+  .chips--used .reply:hover { background: var(--white); color: var(--muted); }
+
+  /* ---------- Узкий экран (не проверялся, базовая адаптация) ---------- */
+  @media (max-width: 900px) {
+    .nav { display: none; }
+    .top__in { justify-content: space-between; gap: 16px; padding: 10px 16px; }
+    .talk { padding: 0 16px; }
+    .turn, .daybreak { grid-template-columns: 1fr; row-gap: 10px; }
+    .who, .say, .replies, .composer__box, .composer__note, .daybreak span { grid-column: 1; }
+    .turn--you .who-you { display: none; }
+    .topics a { grid-template-columns: 1fr auto; }
+    .topics span { grid-column: 1; }
+    .topics em { grid-row: 1 / span 2; grid-column: 2; }
+    .steps { grid-template-columns: 1fr; gap: 20px; }
+    .fields { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition-duration: .01ms !important; } }
+</style>
+</head>
+<body>
+<!-- Иконки: один набор, одна толщина линии -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.5 2 4.5 13.5h6.5L10 22l9.5-12H13l.5-8z"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+</svg>
+
+<header class="top">
+  <div class="top__in">
+    <a class="wordmark" href="#"><span class="mark"><svg class="icon icon--fill"><use href="#i-bolt"/></svg></span>EnergyTool</a>
+    <nav class="nav" aria-label="Разделы">
+      <a href="#topics">Направления</a>
+      <a href="#steps">Как мы работаем</a>
+      <a href="#foot">Контакты</a>
+    </nav>
+    <a class="btn btn--red" href="#composer">Оставить заявку</a>
+  </div>
+</header>
+
+<main class="talk">
+  <!-- Приветствие консультанта = первый экран -->
+  <div class="turn hero">
+    <div class="who"><span class="avatar"><svg class="icon icon--fill"><use href="#i-bolt"/></svg></span><span>Консультант<small>ИИ-помощник EnergyTool</small></span></div>
+    <div class="say">
+      <h1>Здравствуйте.<br>Что происходит<br>с&nbsp;электроэнергией<br>в&nbsp;вашей компании?</h1>
+      <p class="lead">Опишите своими словами. Я&nbsp;уточню пару деталей, подскажу подходящее решение EnergyTool и&nbsp;передам менеджеру суть разговора&nbsp;— без длинных форм.</p>
+    </div>
+  </div>
+
+  <!-- Готовые ответы клиента — контуром, пока не сказаны -->
+  <div class="turn">
+    <ul class="replies" aria-label="Готовые ответы">
+      <li><button class="reply" type="button">Счёт вырос, а&nbsp;потребление то&nbsp;же</button></li>
+      <li><button class="reply" type="button">Хочу видеть все объекты в&nbsp;одном месте</button></li>
+      <li><button class="reply" type="button">Думаем о&nbsp;солнечной станции</button></li>
+      <li><button class="reply" type="button">В&nbsp;сети большие потери</button></li>
+      <li><button class="reply" type="button">Показания счётчиков по&nbsp;фото</button></li>
+      <li><button class="reply" type="button">Хотим покупать на&nbsp;оптовом рынке</button></li>
+    </ul>
+  </div>
+
+  <!-- Раздел «Направления» как ответ консультанта -->
+  <div class="turn turn--you" id="topics">
+    <div class="say"><p class="bubble">А&nbsp;с&nbsp;чем вы&nbsp;помогаете?</p></div>
+    <span class="who-you">Вы</span>
+  </div>
+  <div class="turn">
+    <div class="who"><span class="avatar"><svg class="icon icon--fill"><use href="#i-bolt"/></svg></span><span>Консультант</span></div>
+    <div class="say">
+      <h2>С&nbsp;шестью задачами</h2>
+      <p>Выберите любую&nbsp;— с&nbsp;неё и&nbsp;начнём разговор.</p>
+      <ul class="topics">
+        <li><a href="#"><strong>Вырос счёт за&nbsp;электроэнергию</strong><span>Ценовые категории, пиковые часы, мощность</span><em>Спросить <svg class="icon"><use href="#i-arrow"/></svg></em></a></li>
+        <li><a href="#"><strong>Облачная платформа учёта</strong><span>Показания всех объектов в&nbsp;одном кабинете</span><em>Спросить <svg class="icon"><use href="#i-arrow"/></svg></em></a></li>
+        <li><a href="#"><strong>Солнечные станции</strong><span>Сетевые и&nbsp;гибридные, с&nbsp;накопителями</span><em>Спросить <svg class="icon"><use href="#i-arrow"/></svg></em></a></li>
+        <li><a href="#"><strong>Поиск коммерческих потерь</strong><span>Для сетевых организаций и&nbsp;СНТ</span><em>Спросить <svg class="icon"><use href="#i-arrow"/></svg></em></a></li>
+        <li><a href="#"><strong>Показания по&nbsp;фото</strong><span>Распознавание показаний счётчиков</span><em>Спросить <svg class="icon"><use href="#i-arrow"/></svg></em></a></li>
+        <li><a href="#"><strong>Выход на&nbsp;оптовый рынок</strong><span>Когда покупать электроэнергию напрямую выгоднее</span><em>Спросить <svg class="icon"><use href="#i-arrow"/></svg></em></a></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Раздел «Как мы работаем» -->
+  <div class="turn turn--you" id="steps">
+    <div class="say"><p class="bubble">А&nbsp;что будет после разговора?</p></div>
+    <span class="who-you">Вы</span>
+  </div>
+  <div class="turn">
+    <div class="who"><span class="avatar"><svg class="icon icon--fill"><use href="#i-bolt"/></svg></span><span>Консультант</span></div>
+    <div class="say">
+      <h2>Три шага, и&nbsp;никаких анкет</h2>
+      <ol class="steps">
+        <li><strong>Вы описываете задачу</strong><span>Своими словами, без терминов</span></li>
+        <li><strong>Я&nbsp;уточняю и&nbsp;советую</strong><span>Только по&nbsp;материалам EnergyTool</span></li>
+        <li><strong>Менеджер звонит</strong><span>Уже зная суть разговора</span></li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="turn turn--you">
+    <div class="say"><p class="bubble">А&nbsp;если я&nbsp;не&nbsp;готов оставлять телефон?</p></div>
+    <span class="who-you">Вы</span>
+  </div>
+  <div class="turn">
+    <div class="who"><span class="avatar"><svg class="icon icon--fill"><use href="#i-bolt"/></svg></span><span>Консультант</span></div>
+    <div class="say">
+      <h2>Тогда просто продолжим разговор</h2>
+      <p>Заявку оставите, когда решите сами.</p>
+      <p>Я&nbsp;отвечаю только по&nbsp;материалам EnergyTool. Если ответа у&nbsp;меня нет&nbsp;— скажу прямо и&nbsp;предложу связаться со&nbsp;специалистом.</p>
+    </div>
+  </div>
+
+  <!-- Поле ввода: на всём сайте прижато к низу экрана -->
+  <form class="composer" id="composer" onsubmit="return false">
+    <div class="turn">
+      <div class="composer__box">
+        <label class="sr-only" for="q">Ваш вопрос</label>
+        <input id="q" type="text" placeholder="Напишите свой вопрос&hellip;" autocomplete="off">
+        <button class="btn btn--red send" type="submit" aria-label="Отправить"><svg class="icon"><use href="#i-send"/></svg></button>
+      </div>
+      <p class="composer__note">ИИ может ошибаться. Точные условия и&nbsp;расчёт подтвердит менеджер.</p>
+    </div>
+  </form>
+</main>
+
+<footer class="foot" id="foot">
+  <p>Учебный проект для хакатона True Tech Hack&amp;Change 2026. Не&nbsp;официальный сайт МТС.</p>
+  <a href="#">Панель менеджера</a>
+</footer>
+
+<!-- ======================= Экран 2 ======================= -->
+<div class="mock-note"><p><b>Экран 2.</b> Клиент начал разговор: живые сообщения продолжают ту&nbsp;же ленту, заявка&nbsp;— карточка внутри неё. В&nbsp;шапке появился «Новый диалог». Нажатые варианты становятся репликами клиента. ФИО, телефон и&nbsp;время ответа&nbsp;— выдуманные.</p></div>
+
+<section class="screen" aria-label="Экран 2: разговор идёт">
+  <header class="top">
+    <div class="top__in">
+      <a class="wordmark" href="#"><span class="mark"><svg class="icon icon--fill"><use href="#i-bolt"/></svg></span>EnergyTool</a>
+      <nav class="nav" aria-label="Разделы">
+        <a href="#">Направления</a>
+        <a href="#">Как мы работаем</a>
+        <a href="#">Контакты</a>
+      </nav>
+      <button class="btn btn--ghost" type="button"><svg class="icon"><use href="#i-plus"/></svg>Новый диалог</button>
+      <a class="btn btn--red" href="#">Оставить заявку</a>
+    </div>
+  </header>
+
+  <div class="talk">
+    <div class="daybreak"><span>Разговор начат сегодня в&nbsp;14:32</span></div>
+
+    <div class="turn turn--you">
+      <div class="say"><p class="bubble">Счёт вырос, а&nbsp;потребление то&nbsp;же</p></div>
+      <span class="who-you">Вы</span>
+    </div>
+    <div class="turn">
+      <div class="who"><span class="avatar"><svg class="icon icon--fill"><use href="#i-bolt"/></svg></span><span>Консультант</span></div>
+      <div class="say">
+        <p>Разберёмся. При том&nbsp;же потреблении счёт чаще всего меняется из-за ценовой категории или расхода в&nbsp;пиковые часы. Уточните: это офис, магазин или производство?</p>
+        <div class="chips chips--used"><button class="reply" type="button" aria-disabled="true">Офис</button><button class="reply" type="button" aria-disabled="true">Магазин</button><button class="reply" type="button" aria-disabled="true">Производство</button></div>
+      </div>
+    </div>
+
+    <div class="turn turn--you">
+      <div class="say"><p class="bubble">Небольшое производство, два цеха</p></div>
+      <span class="who-you">Вы</span>
+    </div>
+    <div class="turn">
+      <div class="who"><span class="avatar"><svg class="icon icon--fill"><use href="#i-bolt"/></svg></span><span>Консультант</span></div>
+      <div class="say">
+        <p>Для производства начните с&nbsp;двух шагов: <b>проверить ценовую категорию</b>&nbsp;— от&nbsp;неё зависит, как считается стоимость, и&nbsp;<b>посмотреть почасовой расход</b> в&nbsp;облачной платформе учёта, где показания всех счётчиков собраны в&nbsp;одном кабинете.</p>
+        <p>Точный расчёт по&nbsp;вашим счетам подготовит менеджер. Передать ему заявку с&nbsp;кратким описанием разговора?</p>
+        <div class="chips chips--used"><button class="reply" type="button" aria-disabled="true">Да, передать менеджеру</button><button class="reply" type="button" aria-disabled="true">Сначала ещё спрошу</button></div>
+        <p class="debug">Режим проверки · <b>2,4&nbsp;с</b> · документы: «Почему вырос счёт», «Облачная платформа учёта»</p>
+      </div>
+    </div>
+
+    <div class="turn turn--you">
+      <div class="say"><p class="bubble">Да, передать менеджеру</p></div>
+      <span class="who-you">Вы</span>
+    </div>
+    <div class="turn">
+      <div class="who"><span class="avatar"><svg class="icon icon--fill"><use href="#i-bolt"/></svg></span><span>Консультант</span></div>
+      <div class="say">
+        <form class="lead-card" onsubmit="return false">
+          <h2>Заявка менеджеру</h2>
+          <p class="summary"><b>Менеджер увидит:</b> производство, два цеха; счёт вырос при том&nbsp;же потреблении; интерес&nbsp;— ценовая категория и&nbsp;облачная платформа учёта.</p>
+          <div class="fields">
+            <div class="field field--wide"><label for="f1">ФИО</label><input id="f1" value="Иванова Анна Сергеевна"></div>
+            <div class="field"><label for="f2">Телефон</label><input id="f2" value="+7 900 000-00-01" inputmode="tel"></div>
+            <div class="field"><label for="f3">Компания</label><input id="f3" class="is-focus" placeholder="Например, ООО «Северный цех»"></div>
+          </div>
+          <label class="consent"><input type="checkbox" checked> <span>Согласен на&nbsp;обработку персональных данных по&nbsp;<a href="#">условиям</a></span></label>
+          <div class="actions"><button class="btn btn--red" type="submit">Отправить заявку</button><button class="btn btn--ghost" type="button">Не&nbsp;сейчас</button></div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <form class="composer" onsubmit="return false">
+    <div class="talk">
+      <div class="turn">
+        <div class="composer__box">
+          <label class="sr-only" for="q2">Ваш вопрос</label>
+          <input id="q2" type="text" placeholder="Напишите вопрос&hellip;">
+          <button class="btn btn--red send" type="submit" aria-label="Отправить"><svg class="icon"><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </form>
+</section>
+</body>
+</html>

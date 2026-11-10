@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Шаблон 3 · Мастер ситуаций · EnergyTool</title>
+<!-- Шаблон 3 «Мастер ситуаций». Статичный макет: кнопки ничего не делают.
+     Идея: клиент начинает не с пустого поля, а с выбора своей ситуации. Дальше консультант
+     ведёт по четырём шагам (ситуация → уточнения → рекомендация → заявка) и предлагает
+     готовые ответы в одно касание. Писать своими словами можно всегда. -->
+<style>
+  :root {
+    --red: #cf2e2e;
+    --red-dark: #b32626;
+    --white: #ffffff;
+    --pink: #f78da7;
+    --text: #1d2023;
+    --muted: #626c77;
+    --faint: #969fa8;
+    --gray: #f2f3f7;
+    --gray-2: #e6e8ed;
+    --line: #e2e5eb;
+    --control: #868f98;
+    --font: Arial, "Helvetica Neue", Helvetica, sans-serif;
+    --shadow: 0 8px 30px rgba(29, 32, 35, 0.10);
+    --shadow-float: 0 10px 36px rgba(29, 32, 35, 0.16);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scrollbar-color: var(--faint) transparent; scrollbar-width: thin; }
+  body {
+    margin: 0; font-family: var(--font); font-size: 17px; line-height: 1.5;
+    color: var(--text); background: var(--white);
+    font-variant-numeric: tabular-nums; caret-color: var(--red); accent-color: var(--red);
+  }
+  h1, h2, h3, p { margin: 0; }
+  h1, h2 { line-height: 1.04; letter-spacing: -0.035em; text-wrap: balance; }
+  a { color: var(--red); text-underline-offset: 3px; }
+  button, input { font: inherit; color: inherit; }
+  ::selection { background: var(--red); color: var(--white); }
+  :focus-visible { outline: 3px solid var(--text); outline-offset: 2px; border-radius: 6px; }
+  .icon { width: 20px; height: 20px; flex: none; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .icon--fill { fill: currentColor; stroke-width: 1.5; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    min-height: 44px; padding: 0 22px; border: 0; border-radius: 999px;
+    font-weight: 700; font-size: 15px; line-height: 1.2; text-decoration: none; white-space: nowrap; cursor: pointer;
+    transition: background-color .15s, color .15s, box-shadow .15s;
+  }
+  .btn--red { background: var(--red); color: var(--white); }
+  .btn--red:hover { background: var(--red-dark); }
+  .btn--line { background: var(--white); color: var(--red); box-shadow: inset 0 0 0 2px var(--red); }
+  .btn--line:hover { background: var(--red); color: var(--white); }
+  .btn--ghost { background: transparent; color: var(--text); }
+  .btn--ghost:hover { background: var(--gray); }
+  .btn--icon { width: 44px; padding: 0; }
+
+  /* ---------- Шапка ---------- */
+  .top { background: var(--white); border-bottom: 1px solid var(--line); }
+  .top__in { max-width: 1280px; margin: 0 auto; padding: 12px 40px; display: flex; align-items: center; gap: 44px; }
+  .wordmark { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 21px; letter-spacing: -0.03em; color: var(--text); text-decoration: none; }
+  .mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--red); color: var(--white); }
+  .mark .icon { width: 18px; height: 18px; }
+  .nav { display: flex; gap: 28px; margin-right: auto; }
+  .nav a { color: var(--muted); font-weight: 700; font-size: 15px; text-decoration: none; }
+  .nav a:hover { color: var(--text); }
+
+  /* ---------- Первый экран: выбор ситуации ---------- */
+  .hero { max-width: 1280px; margin: 0 auto; padding: 56px 40px 0; display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: 56px; align-items: start; }
+  .hero h1 { font-size: clamp(48px, 6vw, 88px); }
+  .hero__lead { margin-top: 24px; font-size: 19px; color: var(--muted); max-width: 32ch; }
+  .hero__note { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 15px; color: var(--muted); max-width: 32ch; }
+  /* Путь консультации на первом экране: шаг 1 — текущий */
+  .path { list-style: none; margin: 24px 0 0; padding: 0; display: grid; gap: 14px; font-size: 15px; font-weight: 700; color: var(--muted); }
+  .path li { position: relative; display: flex; align-items: center; gap: 12px; }
+  .path li + li::before { content: ""; position: absolute; left: 13px; top: -14px; width: 2px; height: 14px; background: var(--line); }
+  .path b { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--white); box-shadow: inset 0 0 0 2px var(--control); font-size: 13px; }
+  .path .now { color: var(--red); }
+  .path .now b { background: var(--white); color: var(--red); box-shadow: inset 0 0 0 2px var(--red); } /* как текущий шаг в шапке чата */
+
+  .options { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .option {
+    width: 100%; height: 100%; display: grid; grid-template-columns: 1fr 40px; gap: 6px 16px; align-items: center; align-content: center;
+    padding: 22px 20px 22px 24px; border: 0; border-radius: 20px; background: var(--gray); text-align: left; cursor: pointer;
+    transition: background-color .15s, box-shadow .15s;
+  }
+  .option strong { font-size: 21px; line-height: 1.2; letter-spacing: -0.015em; }
+  .option span { grid-column: 1; font-size: 15px; color: var(--muted); }
+  .option i { grid-column: 2; grid-row: 1 / span 2; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--white); color: var(--red); transition: background-color .15s, color .15s; }
+  .option:hover { background: var(--white); box-shadow: inset 0 0 0 2px var(--red), var(--shadow); }
+  .option:hover i { background: var(--red); color: var(--white); }
+  .own { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 24px; border-radius: 20px; background: var(--white); box-shadow: inset 0 0 0 1.5px var(--control); }
+  .own input { flex: 1; min-width: 0; height: 48px; border: 0; outline: 0; background: none; font-size: 18px; }
+  .own input::placeholder { color: var(--muted); }
+
+  /* ---------- Путь консультации: четыре шага ---------- */
+  .section { max-width: 1280px; margin: 0 auto; padding: 112px 40px 0; }
+  .section h2 { font-size: clamp(32px, 3.4vw, 48px); max-width: 20ch; }
+  .track { list-style: none; margin: 48px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); counter-reset: t; }
+  .track li { counter-increment: t; position: relative; padding-right: 32px; }
+  .track li::before {
+    content: counter(t); position: relative; z-index: 1; display: grid; place-items: center; width: 56px; height: 56px; border-radius: 50%;
+    background: var(--white); color: var(--red); box-shadow: inset 0 0 0 3px var(--red); font-size: 22px; font-weight: 700;
+  }
+  .track li::after { content: ""; position: absolute; left: 56px; right: 0; top: 27px; height: 3px; background: var(--red); }
+  .track li:last-child::after { display: none; }
+  .track li:last-child::before { background: var(--red); color: var(--white); }
+  .track strong { display: block; margin-top: 20px; font-size: 22px; letter-spacing: -0.015em; }
+  .track span { display: block; margin-top: 6px; color: var(--muted); max-width: 26ch; }
+
+  /* ---------- Для кого ---------- */
+  .who-list { list-style: none; margin: 40px 0 0; padding: 0; display: grid; grid-template-columns: repeat(5, 1fr); gap: 32px; }
+  .who-list li { padding-top: 16px; border-top: 2px solid var(--text); }
+  .who-list strong { display: block; font-size: 18px; line-height: 1.25; }
+  .who-list span { display: block; margin-top: 8px; font-size: 15px; color: var(--muted); }
+
+  .foot { max-width: 1280px; margin: 112px auto 0; padding: 28px 40px 48px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+
+  /* ---------- Пояснение к макету (не часть дизайна) ---------- */
+  .mock-note { background: var(--text); color: var(--white); }
+  .mock-note p { max-width: 1280px; margin: 0 auto; padding: 22px 40px; font-size: 15px; }
+
+  /* ---------- Экран 2: чат на весь экран с шагами ---------- */
+  .screen { position: relative; background: var(--white); padding-bottom: 150px; }
+  .chat-head { position: relative; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 24px; padding: 12px 24px; border-bottom: 1px solid var(--line); }
+  .chat-title { display: flex; align-items: center; gap: 12px; line-height: 1.25; }
+  .chat-title b { display: block; font-size: 16px; }
+  .chat-title small { font-size: 13px; color: var(--muted); }
+  .avatar { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: 50%; background: var(--text); color: var(--red); }
+  .avatar .icon { width: 18px; height: 18px; }
+  .chat-tools { display: flex; justify-content: flex-end; gap: 4px; }
+
+  /* Шаги в шапке чата: пройденные — галочка, текущий — красный */
+  .steps-mini { list-style: none; margin: 0; padding: 0; display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 700; color: var(--muted); }
+  .steps-mini li { display: flex; align-items: center; gap: 8px; }
+  .steps-mini li + li::before { content: ""; width: 28px; height: 2px; background: var(--line); margin-right: 2px; }
+  .steps-mini .done + li::before, .steps-mini .done + .done::before { background: var(--red); }
+  .steps-mini b { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--control); font-size: 12px; }
+  .steps-mini .done { color: var(--text); }
+  .steps-mini .done b { background: var(--red); color: var(--white); box-shadow: none; }
+  .steps-mini .done b .icon { width: 14px; height: 14px; stroke-width: 3; }
+  .steps-mini .now { color: var(--red); }
+  .steps-mini .now b { background: var(--white); color: var(--red); box-shadow: inset 0 0 0 2px var(--red); }
+
+  .feed { max-width: 760px; margin: 0 auto; padding: 36px 24px 0; display: flex; flex-direction: column; gap: 16px; }
+  .msg { max-width: 86%; font-size: 17px; line-height: 1.5; }
+  .msg--bot { align-self: flex-start; }
+  .msg--bot p + p { margin-top: 10px; }
+  .msg--you { align-self: flex-end; padding: 12px 18px; border-radius: 20px 20px 6px 20px; background: var(--red); color: var(--white); }
+  .msg--pick { display: inline-flex; flex-direction: column; gap: 2px; }
+  .msg--pick small { font-size: 13px; opacity: .92; }
+  /* Готовые ответы под вопросом бота: выбранный — красный, остальные приглушены */
+  .answers { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .answers button { min-height: 40px; padding: 8px 16px; border: 0; border-radius: 20px; background: var(--gray); color: var(--muted); font-size: 15px; font-weight: 700; cursor: pointer; }
+  .answers button[aria-pressed="true"] { background: var(--red); color: var(--white); }
+
+  /* Рекомендация — отдельный блок: что подходит и почему */
+  .advice { align-self: stretch; padding: 24px; border-radius: 20px; background: var(--gray); }
+  .advice h2 { font-size: 22px; letter-spacing: -0.02em; }
+  .advice ol { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 12px; }
+  .advice li { display: grid; grid-template-columns: 28px 1fr; gap: 12px; }
+  .advice li i { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--red); color: var(--white); font-style: normal; font-weight: 700; font-size: 14px; }
+  .advice li b { display: block; }
+  .advice li span { color: var(--muted); font-size: 16px; }
+  .advice > p { margin-top: 14px; font-size: 16px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+  .debug { display: inline-block; margin-top: 12px; padding: 5px 10px; border-radius: 8px; background: var(--white); font-size: 13px; color: var(--muted); }
+  .debug b { color: var(--text); }
+
+  /* Заявка — четвёртый шаг */
+  .lead-step { align-self: stretch; padding: 24px; border-radius: 20px; background: var(--white); border: 1px solid var(--line); }
+  .lead-step h2 { font-size: 22px; letter-spacing: -0.02em; }
+  .lead-step > p { margin-top: 6px; font-size: 15px; color: var(--muted); }
+  .fields { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 12px; margin-top: 16px; }
+  .field label { display: block; margin-bottom: 6px; font-size: 14px; font-weight: 700; }
+  .field input { width: 100%; height: 48px; padding: 0 14px; border: 1.5px solid var(--control); border-radius: 12px; background: var(--white); font-size: 16px; }
+  .field input::placeholder { color: var(--muted); }
+  .field input.is-focus { border-color: var(--red); box-shadow: 0 0 0 4px rgba(207, 46, 46, 0.16); }
+  .consent { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; font-size: 14px; color: var(--muted); }
+  .consent input { width: 20px; height: 20px; margin: 0; flex: none; }
+
+  /* Низ экрана: готовые ответы над полем ввода */
+  .bottom { position: absolute; left: 0; right: 0; bottom: 0; padding: 16px 24px 20px; background: linear-gradient(to top, var(--white) 75%, rgba(255, 255, 255, 0)); }
+  .bottom__in { max-width: 712px; margin: 0 auto; }
+  .quick { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+  .quick button { min-height: 38px; padding: 6px 14px; border: 0; border-radius: 999px; background: var(--gray); font-size: 14px; font-weight: 700; cursor: pointer; }
+  .quick button:hover { background: var(--gray-2); }
+  .composer { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 20px; border-radius: 999px; background: var(--white); box-shadow: var(--shadow-float), 0 0 0 1px var(--line); }
+  .composer input { flex: 1; min-width: 0; height: 44px; border: 0; outline: 0; background: none; font-size: 16px; }
+  .composer input::placeholder { color: var(--muted); }
+
+  @media (max-width: 900px) {
+    .nav { display: none; }
+    .top__in, .hero, .section, .foot { padding-left: 16px; padding-right: 16px; }
+    .hero, .options { grid-template-columns: 1fr; }
+    .track, .who-list { grid-template-columns: 1fr; gap: 24px; }
+    .track li::after { display: none; }
+    .chat-head { grid-template-columns: 1fr auto; }
+    .steps-mini { grid-column: 1 / -1; grid-row: 2; font-size: 12px; }
+    .fields { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition-duration: .01ms !important; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.5 2 4.5 13.5h6.5L10 22l9.5-12H13l.5-8z"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+</svg>
+
+<header class="top">
+  <div class="top__in">
+    <a class="wordmark" href="#"><span class="mark"><svg class="icon icon--fill"><use href="#i-bolt"/></svg></span>EnergyTool</a>
+    <nav class="nav" aria-label="Разделы">
+      <a href="#path">Как проходит консультация</a>
+      <a href="#for">Для кого</a>
+      <a href="#foot">Контакты</a>
+    </nav>
+    <button class="btn btn--red" type="button">Оставить заявку</button>
+  </div>
+</header>
+
+<main>
+  <!-- Первый экран: сразу выбор ситуации, это и есть начало консультации -->
+  <section class="hero">
+    <div>
+      <h1>С&nbsp;чего начнём?</h1>
+      <p class="hero__lead">Выберите, что ближе к&nbsp;вашей ситуации. Консультант задаст пару вопросов с&nbsp;готовыми ответами и&nbsp;подскажет решение EnergyTool.</p>
+      <p class="hero__note">Отвечает ИИ-консультант, только по&nbsp;материалам компании. Телефон понадобится, только если захотите заявку.</p>
+      <ol class="path" aria-label="Шаги консультации">
+        <li class="now" aria-current="step"><b>1</b>Ситуация&nbsp;— вы&nbsp;здесь</li>
+        <li><b>2</b>Уточнения</li>
+        <li><b>3</b>Рекомендация</li>
+        <li><b>4</b>Заявка, по&nbsp;желанию</li>
+      </ol>
+    </div>
+    <ul class="options" aria-label="Ваша ситуация">
+      <li><button class="option" type="button"><strong>Вырос счёт за&nbsp;электроэнергию</strong><span>Разберём ценовую категорию, пиковые часы, мощность</span><i><svg class="icon"><use href="#i-arrow"/></svg></i></button></li>
+      <li><button class="option" type="button"><strong>Много объектов, сложно вести учёт</strong><span>Облачная платформа: показания в&nbsp;одном кабинете</span><i><svg class="icon"><use href="#i-arrow"/></svg></i></button></li>
+      <li><button class="option" type="button"><strong>В&nbsp;сети теряется электроэнергия</strong><span>Поиск коммерческих потерь для сетей и&nbsp;СНТ</span><i><svg class="icon"><use href="#i-arrow"/></svg></i></button></li>
+      <li><button class="option" type="button"><strong>Думаем о&nbsp;солнечной станции</strong><span>Сетевые и&nbsp;гибридные, с&nbsp;накопителями</span><i><svg class="icon"><use href="#i-arrow"/></svg></i></button></li>
+      <li><button class="option" type="button"><strong>Неудобно снимать показания</strong><span>Распознавание показаний счётчиков по&nbsp;фото</span><i><svg class="icon"><use href="#i-arrow"/></svg></i></button></li>
+      <li><button class="option" type="button"><strong>Хотим покупать дешевле</strong><span>Когда выгоден выход на&nbsp;оптовый рынок</span><i><svg class="icon"><use href="#i-arrow"/></svg></i></button></li>
+      <li class="own">
+        <label class="sr-only" for="own">Опишите ситуацию своими словами</label>
+        <input id="own" type="text" placeholder="Другое&nbsp;— опишу своими словами">
+        <button class="btn btn--red btn--icon" type="button" aria-label="Начать"><svg class="icon"><use href="#i-send"/></svg></button>
+      </li>
+    </ul>
+  </section>
+
+  <section class="section" id="path">
+    <h2>Консультация идёт по&nbsp;четырём шагам</h2>
+    <ol class="track">
+      <li><strong>Ситуация</strong><span>Выбираете готовую или описываете свою</span></li>
+      <li><strong>Уточнения</strong><span>Два-три вопроса с&nbsp;готовыми ответами</span></li>
+      <li><strong>Рекомендация</strong><span>Что подходит и&nbsp;почему&nbsp;— по&nbsp;материалам EnergyTool</span></li>
+      <li><strong>Заявка</strong><span>Менеджер звонит, уже зная суть. Шаг по&nbsp;желанию</span></li>
+    </ol>
+  </section>
+
+  <section class="section" id="for">
+    <h2>С&nbsp;какими задачами приходят</h2>
+    <ul class="who-list">
+      <li><strong>Малый и&nbsp;средний бизнес</strong><span>Выросли счета, непонятны ценовая категория и&nbsp;пиковые часы</span></li>
+      <li><strong>Энергетики предприятий</strong><span>Учёт по&nbsp;нескольким объектам, показания счётчиков</span></li>
+      <li><strong>Правления СНТ</strong><span>Потери в&nbsp;сети товарищества</span></li>
+      <li><strong>Сетевые организации</strong><span>Поиск коммерческих потерь</span></li>
+      <li><strong>Менеджеры МТС в&nbsp;регионах</strong><span>Подбор решения для своего клиента</span></li>
+    </ul>
+  </section>
+</main>
+
+<footer class="foot" id="foot">
+  <p>Учебный проект для хакатона True Tech Hack&amp;Change 2026. Не&nbsp;официальный сайт МТС.</p>
+  <a href="#">Панель менеджера</a>
+</footer>
+
+<!-- ======================= Экран 2 ======================= -->
+<div class="mock-note"><p><b>Экран 2.</b> Клиент выбрал «Вырос счёт». Чат на&nbsp;весь экран, вверху&nbsp;— на&nbsp;каком он&nbsp;шаге. На&nbsp;уточнения отвечает кнопками, рекомендация собрана в&nbsp;отдельный блок, заявка&nbsp;— последний шаг. ФИО, телефон и&nbsp;время ответа&nbsp;— выдуманные.</p></div>
+
+<section class="screen" aria-label="Экран 2: консультация по шагам">
+  <header class="chat-head">
+    <div class="chat-title"><span class="avatar"><svg class="icon icon--fill"><use href="#i-bolt"/></svg></span><span><b>Консультант EnergyTool</b><small>ИИ-помощник · по&nbsp;материалам компании</small></span></div>
+    <ol class="steps-mini" aria-label="Шаги консультации">
+      <li class="done"><b><svg class="icon"><use href="#i-check"/></svg></b>Ситуация</li>
+      <li class="done"><b><svg class="icon"><use href="#i-check"/></svg></b>Уточнения</li>
+      <li class="done"><b><svg class="icon"><use href="#i-check"/></svg></b>Рекомендация</li>
+      <li class="now" aria-current="step"><b>4</b>Заявка</li>
+    </ol>
+    <div class="chat-tools">
+      <button class="btn btn--ghost" type="button"><svg class="icon"><use href="#i-plus"/></svg>Новый диалог</button>
+      <button class="btn btn--ghost btn--icon" type="button" aria-label="Закрыть чат"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+  </header>
+
+  <div class="feed" role="log">
+    <p class="msg msg--you msg--pick"><small>Ситуация</small>Вырос счёт за&nbsp;электроэнергию</p>
+    <div class="msg msg--bot"><p>Понял. Пара вопросов, чтобы не&nbsp;гадать. Где это&nbsp;— офис, магазин или производство?</p>
+      <div class="answers" aria-label="Ответ клиента"><button type="button" aria-pressed="false">Офис</button><button type="button" aria-pressed="false">Магазин</button><button type="button" aria-pressed="true">Производство</button><button type="button" aria-pressed="false">Другое&nbsp;— напишу</button></div>
+    </div>
+    <div class="msg msg--bot"><p>Счёт растёт понемногу каждый месяц или вырос резко?</p>
+      <div class="answers" aria-label="Ответ клиента"><button type="button" aria-pressed="false">Понемногу каждый месяц</button><button type="button" aria-pressed="true">Вырос резко</button><button type="button" aria-pressed="false">Не&nbsp;знаю</button></div>
+    </div>
+
+    <div class="advice">
+      <h2>Что подходит под вашу ситуацию</h2>
+      <ol>
+        <li><i>1</i><div><b>Проверить ценовую категорию</b><span>От&nbsp;неё зависит, как считается стоимость электроэнергии для предприятия.</span></div></li>
+        <li><i>2</i><div><b>Облачная платформа учёта</b><span>Почасовой расход всех счётчиков в&nbsp;одном кабинете&nbsp;— видно, когда и&nbsp;где растёт потребление.</span></div></li>
+      </ol>
+      <p>Точный расчёт по&nbsp;вашим счетам подготовит менеджер.</p>
+      <div class="actions"><button class="btn btn--red" type="button">Передать менеджеру</button><button class="btn btn--line" type="button">Задать ещё вопрос</button></div>
+      <span class="debug">Режим проверки · <b>2,4&nbsp;с</b> · документы: «Почему вырос счёт», «Облачная платформа учёта»</span>
+    </div>
+
+    <form class="lead-step" onsubmit="return false">
+      <h2>Кому позвонить?</h2>
+      <p>Менеджер получит заявку вместе с&nbsp;кратким описанием разговора.</p>
+      <div class="fields">
+        <div class="field"><label for="f1">ФИО</label><input id="f1" value="Иванова Анна Сергеевна"></div>
+        <div class="field"><label for="f2">Телефон</label><input id="f2" value="+7 900 000-00-01"></div>
+        <div class="field"><label for="f3">Компания</label><input id="f3" class="is-focus" placeholder="ООО «Северный цех»"></div>
+      </div>
+      <label class="consent"><input type="checkbox" checked><span>Согласен на&nbsp;обработку персональных данных по&nbsp;<a href="#">условиям</a></span></label>
+      <div class="actions"><button class="btn btn--red" type="submit">Отправить заявку</button><button class="btn btn--ghost" type="button">Не&nbsp;сейчас, продолжить разговор</button></div>
+    </form>
+  </div>
+
+  <div class="bottom">
+    <div class="bottom__in">
+      <div class="quick" aria-label="Готовые вопросы">
+        <button type="button">Что такое ценовая категория?</button>
+        <button type="button">Подойдут&nbsp;ли наши счётчики?</button>
+        <button type="button">Можно без звонка?</button>
+      </div>
+      <form class="composer" onsubmit="return false">
+        <label class="sr-only" for="cq">Сообщение</label>
+        <input id="cq" type="text" placeholder="Или напишите своими словами">
+        <button class="btn btn--red btn--icon" type="submit" aria-label="Отправить"><svg class="icon"><use href="#i-send"/></svg></button>
+      </form>
+    </div>
+  </div>
+</section>
+</body>
+</html>

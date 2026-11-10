@@ -29,3 +29,5 @@ runs/
 .impeccable/history/
 .impeccable/config.local.json
 .impeccable/provider-smoke/
+# скриншоты проверок дизайна (пересоздаются при каждой проверке)
+.impeccable/review/
