@@ -259,17 +259,61 @@ class ApiTest(unittest.TestCase):
         ids = [s["session_id"] for s in self.client.get("/api/sessions").json()]
         self.assertLess(ids.index(first), ids.index(second))
 
-    def test_guest_and_signed_in_client(self):
-        self.assertEqual(self.client.get("/api/me").json(), {"authenticated": False, "phone": None})
-        guest_sid = self.ask("Вопрос гостя").json()["session_id"]
-        self.assertEqual(self.client.get("/api/me/sessions").json(), [])
+    def test_guest_sees_dialogs_of_own_browser_only(self):
+        # Два «браузера»: у каждого свой набор cookie
+        anna, boris = TestClient(main.app), TestClient(main.app)
+        self.assertEqual(anna.get("/api/me").json(), {"authenticated": False, "phone": None})
+        self.assertEqual(anna.get("/api/me/sessions").json(), [])  # метки ещё нет — список пуст
+        self.assertNotIn("et_visitor", anna.cookies)               # и без диалога метка не выдаётся
 
+        r = anna.post("/api/chat", json={"message": "Вопрос Анны"})
+        cookie = r.headers["set-cookie"]
+        self.assertIn("et_visitor=", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=lax", cookie)
+        first = r.json()["session_id"]
+        second = anna.post("/api/sessions").json()["session_id"]  # «Новый диалог» — та же метка
+        anna.post("/api/chat", json={"message": "Второй вопрос Анны", "session_id": second})
+        other = boris.post("/api/chat", json={"message": "Вопрос Бориса"}).json()["session_id"]
+
+        mine = anna.get("/api/me/sessions").json()
+        self.assertEqual([s["session_id"] for s in mine], [second, first])  # новые сверху
+        self.assertEqual(mine[1]["preview"], "Вопрос Анны")
+        self.assertNotIn("visitor_id", mine[0])
+        self.assertEqual([s["session_id"] for s in boris.get("/api/me/sessions").json()], [other])
+        self.assertNotIn("visitor_id", anna.get(f"/api/sessions/{first}").json())
+
+    def test_broken_visitor_cookie_is_ignored(self):
+        self.ask("Чей-то диалог")
+        stranger = TestClient(main.app, cookies={"et_visitor": "' OR 1=1 --"})
+        self.assertEqual(stranger.get("/api/me/sessions").json(), [])
+
+    def test_signed_in_client(self):
+        guest, client, other = TestClient(main.app), TestClient(main.app), TestClient(main.app)
+        guest_sid = guest.post("/api/chat", json={"message": "Вопрос гостя"}).json()["session_id"]
         with mock.patch.object(config, "DEMO_CLIENT_PHONE", "+7 900 000-00-01"):
-            self.assertEqual(self.client.get("/api/me").json(), {"authenticated": True, "phone": "+7 900 000-00-01"})
-            own_sid = self.ask("Вопрос клиента").json()["session_id"]
-            mine = [s["session_id"] for s in self.client.get("/api/me/sessions").json()]
+            self.assertEqual(client.get("/api/me").json(), {"authenticated": True, "phone": "+7 900 000-00-01"})
+            own_sid = client.post("/api/chat", json={"message": "Вопрос клиента"}).json()["session_id"]
+            mine = [s["session_id"] for s in client.get("/api/me/sessions").json()]
+            # тот же номер с другого устройства — диалоги по номеру видны и там
+            elsewhere = [s["session_id"] for s in other.get("/api/me/sessions").json()]
         self.assertIn(own_sid, mine)
         self.assertNotIn(guest_sid, mine)
+        self.assertIn(own_sid, elsewhere)
+
+    def test_old_database_gets_visitor_column(self):
+        old = Path(TMP.name) / "old.db"
+        with sqlite3.connect(old) as c:
+            c.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, client_phone TEXT)")
+            c.execute("INSERT INTO sessions VALUES ('staraya', '2026-11-11T10:00:00.000+00:00', '2099-01-01T00:00:00.000+00:00', NULL)")
+        c.close()
+        with mock.patch.object(config, "DB_PATH", old):
+            db.init()
+            db.init()  # повторный старт ничего не ломает
+            sid = db.create_session(visitor_id="metka-brauzera-000000000")
+            db.add_message(sid, "user", "Вопрос")
+            self.assertEqual([s["session_id"] for s in db.list_client_sessions(None, "metka-brauzera-000000000")], [sid])
+            self.assertTrue(db.session_exists("staraya"))
 
     def test_manager_password(self):
         sid = self.ask().json()["session_id"]

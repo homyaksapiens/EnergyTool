@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     id           TEXT PRIMARY KEY,
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL,
-    client_phone TEXT              -- номер вошедшего клиента; у гостя пусто; наружу не отдаётся
+    client_phone TEXT,             -- номер вошедшего клиента; у гостя пусто; наружу не отдаётся
+    visitor_id   TEXT              -- анонимная метка браузера из cookie; наружу не отдаётся
 );
 CREATE TABLE IF NOT EXISTS messages (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,16 +67,20 @@ def init() -> None:
     with connect() as c:
         c.execute("PRAGMA journal_mode = WAL")  # читатели не ждут пишущего
         c.executescript(SCHEMA)
+        # База, созданная до появления метки браузера: добавляем колонку, старые диалоги остаются без метки
+        if "visitor_id" not in {row["name"] for row in c.execute("PRAGMA table_info(sessions)")}:
+            c.execute("ALTER TABLE sessions ADD COLUMN visitor_id TEXT")
+        c.execute("CREATE INDEX IF NOT EXISTS sessions_by_visitor ON sessions(visitor_id)")
 
 
 # ---------- сессии ----------
 
-def create_session(client_phone: str | None = None) -> str:
+def create_session(client_phone: str | None = None, visitor_id: str | None = None) -> str:
     session_id = uuid.uuid4().hex
     t = now()
     with connect() as c:
-        c.execute("INSERT INTO sessions (id, created_at, updated_at, client_phone) VALUES (?,?,?,?)",
-                  (session_id, t, t, client_phone or None))
+        c.execute("INSERT INTO sessions (id, created_at, updated_at, client_phone, visitor_id) VALUES (?,?,?,?,?)",
+                  (session_id, t, t, client_phone or None, visitor_id or None))
     return session_id
 
 
@@ -111,9 +116,29 @@ def _message(row: sqlite3.Row) -> dict:
     return m
 
 
-def list_sessions(client_phone: str | None = None) -> list[dict]:
-    """Сессии с хотя бы одним сообщением, новые сверху. client_phone — только диалоги этого клиента."""
-    where = "WHERE s.client_phone = ?" if client_phone else ""
+def list_sessions() -> list[dict]:
+    """Все сессии с хотя бы одним сообщением, новые сверху — для панели менеджера."""
+    return _list_sessions("", ())
+
+
+def list_client_sessions(client_phone: str | None, visitor_id: str | None) -> list[dict]:
+    """Диалоги одного клиента: по номеру вошедшего и по метке его браузера. Нет ни того, ни другого — пусто.
+
+    Отдельная функция, а не параметры list_sessions: пустой фильтр не должен случайно отдать чужие диалоги.
+    """
+    conditions, params = [], []
+    if client_phone:
+        conditions.append("s.client_phone = ?")
+        params.append(client_phone)
+    if visitor_id:
+        conditions.append("s.visitor_id = ?")
+        params.append(visitor_id)
+    if not conditions:
+        return []
+    return _list_sessions("WHERE " + " OR ".join(conditions), tuple(params))
+
+
+def _list_sessions(where: str, params: tuple) -> list[dict]:
     with connect() as c:
         rows = c.execute(
             f"""SELECT s.id, s.created_at, s.updated_at,
@@ -123,7 +148,7 @@ def list_sessions(client_phone: str | None = None) -> list[dict]:
                          ORDER BY m.id LIMIT 1) AS preview
                 FROM sessions s {where}
                 ORDER BY s.updated_at DESC, s.rowid DESC""",
-            (client_phone,) if client_phone else (),
+            params,
         ).fetchall()
     return [
         {"session_id": r["id"], "created_at": r["created_at"], "updated_at": r["updated_at"],

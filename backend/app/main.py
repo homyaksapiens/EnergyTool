@@ -4,6 +4,7 @@
 """
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -80,6 +81,31 @@ def current_phone(request: Request) -> str | None:
     return config.DEMO_CLIENT_PHONE or None
 
 
+# Гостя узнаём по анонимной метке браузера в cookie: по ней «Ваши диалоги» работают без входа.
+# Метка случайная, ничего не говорит о человеке и выдаётся, только когда клиент начал диалог
+VISITOR_COOKIE = "et_visitor"
+VISITOR_RE = re.compile(r"^[A-Za-z0-9_-]{20,64}$")
+
+
+def current_visitor(request: Request) -> str | None:
+    """Метка браузера из cookie или None, если её нет или она испорчена."""
+    value = request.cookies.get(VISITOR_COOKIE, "")
+    return value if VISITOR_RE.match(value) else None
+
+
+def remember_visitor(request: Request, response: Response) -> str:
+    """Метка браузера для новой сессии: берём из cookie или выдаём новую. Срок cookie — как срок хранения диалогов."""
+    visitor = current_visitor(request) or secrets.token_urlsafe(24)
+    response.set_cookie(
+        VISITOR_COOKIE, visitor,
+        max_age=config.RETENTION_DAYS * 24 * 3600,
+        httponly=True,   # скрипты страницы метку не видят
+        samesite="lax",  # с чужих сайтов в запросах к API не отправляется
+        secure=request.url.scheme == "https",
+    )
+    return visitor
+
+
 basic = HTTPBasic(auto_error=False)
 
 
@@ -149,13 +175,13 @@ def model_history(stored: list[dict]) -> list[dict]:
 
 
 @app.post("/api/sessions", status_code=201)
-def new_session(request: Request):
+def new_session(request: Request, response: Response):
     """Кнопка «Новый диалог»: пустая сессия без истории. Старая остаётся в базе."""
-    return {"session_id": db.create_session(current_phone(request))}
+    return {"session_id": db.create_session(current_phone(request), remember_visitor(request, response))}
 
 
 @app.post("/api/chat")
-def chat(body: ChatIn, request: Request):
+def chat(body: ChatIn, request: Request, response: Response):
     """Реплика клиента → ответ консультанта. Обычный def: вызов модели долгий и идёт в пуле потоков."""
     text = body.message.strip()
     if not text:
@@ -169,7 +195,7 @@ def chat(body: ChatIn, request: Request):
         if not db.session_exists(session_id):
             raise HTTPException(404, "Сессия не найдена")
     else:
-        session_id = db.create_session(current_phone(request))
+        session_id = db.create_session(current_phone(request), remember_visitor(request, response))
 
     with session_locks.hold(session_id):
         session = db.get_session(session_id)
@@ -230,9 +256,11 @@ def me(request: Request):
 
 @app.get("/api/me/sessions")
 def my_sessions(request: Request):
-    """Диалоги вошедшего клиента для колонки «Ваши диалоги». Гостю — пустой список."""
-    phone = current_phone(request)
-    return db.list_sessions(client_phone=phone) if phone else []
+    """Диалоги клиента для колонки «Ваши диалоги»: по номеру вошедшего клиента и по метке этого браузера.
+
+    Гость видит диалоги, начатые в этом браузере; без метки — пустой список.
+    """
+    return db.list_client_sessions(current_phone(request), current_visitor(request))
 
 
 @app.get("/api/sessions/{session_id}")
