@@ -57,7 +57,7 @@ const Api = (() => {
     chat: (sessionId, message, clientMessageId) =>
       request("POST", "/api/chat", { session_id: sessionId, message, client_message_id: clientMessageId }, 90000),
     listSessions: () => request("GET", "/api/sessions"),        // все сессии — только для панели менеджера
-    mySessions: () => request("GET", "/api/me/sessions"),         // диалоги вошедшего клиента; гостю — []
+    mySessions: () => request("GET", "/api/me/sessions"),         // диалоги этого клиента: по номеру или по метке браузера
     getSession: (id) => request("GET", `/api/sessions/${encodeURIComponent(id)}`),
     createLead: (lead) => request("POST", "/api/leads", lead, 90000), // резюме для менеджера пишет бот — тоже может быть долго
     listLeads: () => request("GET", "/api/leads"),

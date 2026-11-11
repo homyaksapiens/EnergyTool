@@ -63,7 +63,7 @@ const Chat = (() => {
   };
   let askSeq = 0;       // счётчик для id вопросов клиента: на них ссылается оглавление
   let dialogsSeq = 0;   // номер последнего запроса списка диалогов
-  let outlinePinned = null, pinTimer = 0; // пункт оглавления, к которому сейчас прокручиваем
+  let outlinePinned = null; // пункт оглавления, выбранный нажатием: остаётся текущим, пока клиент сам не прокрутит ленту
 
   const STATUS_IDLE = "ИИ-помощник · отвечает по материалам компании";
   const SLOW_AFTER_MS = 8000;  // после этого показываем «ответ готовится дольше обычного»
@@ -733,23 +733,18 @@ const Chat = (() => {
 
   // ---------- Слева: «Ваши диалоги» ----------
 
-  // Список прошлых диалогов вошедшего клиента. Общий GET /api/sessions здесь не используем:
-  // в нём разговоры всех клиентов. Гость видит подсказку, как получить свой список
+  // Список прошлых диалогов клиента. Общий GET /api/sessions здесь не используем: в нём разговоры всех клиентов.
+  // Гостя сервер узнаёт по метке браузера в cookie, вошедшего клиента — ещё и по номеру телефона
   async function loadDialogs() {
     const seq = ++dialogsSeq; // запросы могут вернуться не по порядку — показываем только последний
-    if (!state.profile) {
-      state.dialogs = [];
+    try {
+      const list = await Api.mySessions();
+      if (seq !== dialogsSeq) return;
+      state.dialogs = list;
       state.dialogsError = false;
-    } else {
-      try {
-        const list = await Api.mySessions();
-        if (seq !== dialogsSeq) return;
-        state.dialogs = list;
-        state.dialogsError = false;
-      } catch {
-        if (seq !== dialogsSeq) return;
-        state.dialogsError = true; // старый список оставляем, под ним — «Повторить»
-      }
+    } catch {
+      if (seq !== dialogsSeq) return;
+      state.dialogsError = true; // старый список оставляем, под ним — «Повторить»
     }
     renderDialogs();
   }
@@ -758,7 +753,7 @@ const Chat = (() => {
     // Список перерисовывается после каждого ответа: возвращаем фокус клавиатуры на тот же пункт
     const focusedId = el.dialogsList.contains(document.activeElement) ? document.activeElement.dataset.id : null;
     const items = [...state.dialogs];
-    // Текущий разговор уже идёт, а в списке с сервера его ещё нет (первый ответ в пути, гость) — показываем сверху
+    // Текущий разговор уже идёт, а в списке с сервера его ещё нет (первый ответ в пути) — показываем сверху
     const firstAsk = el.feed.querySelector(".msg--user .msg__bubble");
     if (state.sessionId && firstAsk && !items.some((d) => d.session_id === state.sessionId)) {
       items.unshift({ session_id: state.sessionId, updated_at: new Date().toISOString(), lead_id: state.leadId, preview: firstAsk.textContent });
@@ -769,12 +764,10 @@ const Chat = (() => {
       if (again) again.focus({ preventScroll: true });
     }
 
-    // Подсказка под списком: ошибка, гость или пока пусто
+    // Подсказка под списком: ошибка или пока пусто
     let hint = "";
     if (state.dialogsError) {
       hint = `Не удалось загрузить прошлые диалоги.<br><button type="button" class="link-btn" data-act="reload">${UI.icon("retry")} Повторить</button>`;
-    } else if (!state.profile) {
-      hint = "Войдите на сайт по номеру телефона — здесь появятся ваши прошлые диалоги.";
     } else if (!items.length) {
       hint = "Здесь появятся ваши диалоги с консультантом.";
     }
@@ -868,7 +861,8 @@ const Chat = (() => {
   // Подсветить вопрос, до которого дочитали: последний, чей верх уже выше 40 % высоты ленты
   function markOutline() {
     const items = [...el.outlineList.querySelectorAll(".outline__item")];
-    if (!items.length || outlinePinned) return; // идёт прокрутка к нажатому вопросу — его подсветку не трогаем
+    // Пункт выбран нажатием — его отметку не трогаем (если только он не исчез вместе со старым списком)
+    if (!items.length || (outlinePinned && outlinePinned.isConnected)) return;
     const box = el.scroll.getBoundingClientRect();
     const line = box.top + box.height * 0.4;
     let current = items[0];
@@ -878,7 +872,27 @@ const Chat = (() => {
     }
     // Долистали до конца — подсвечиваем последний вопрос, даже если он ниже линии
     if (el.scroll.scrollTop + el.scroll.clientHeight >= el.scroll.scrollHeight - 4) current = items[items.length - 1];
-    items.forEach((b) => (b === current ? b.setAttribute("aria-current", "true") : b.removeAttribute("aria-current")));
+    setOutlineCurrent(current);
+  }
+
+  // Отметить текущий пункт оглавления и подвести к нему красную метку
+  function setOutlineCurrent(current) {
+    el.outlineList.querySelectorAll(".outline__item").forEach((b) =>
+      (b === current ? b.setAttribute("aria-current", "true") : b.removeAttribute("aria-current")));
+    moveOutlineMarker();
+  }
+
+  // Красная метка слева от оглавления — одна на список (.outline__list::before в chat.css).
+  // Здесь только сообщаем стилям, где текущий пункт и какой он высоты; плавное скольжение делает CSS
+  function moveOutlineMarker() {
+    const current = el.outlineList.querySelector('.outline__item[aria-current="true"]');
+    el.outlineList.classList.toggle("has-marker", Boolean(current));
+    if (!current) return;
+    const y = `${current.offsetTop}px`, h = `${current.offsetHeight}px`;
+    // Прокрутка зовёт эту функцию на каждом кадре — стили трогаем, только если метка действительно сдвинулась
+    if (el.outlineList.style.getPropertyValue("--marker-y") === y && el.outlineList.style.getPropertyValue("--marker-h") === h) return;
+    el.outlineList.style.setProperty("--marker-y", y);
+    el.outlineList.style.setProperty("--marker-h", h);
   }
 
   // ---------- Левая колонка на узком экране: выезжает по кнопке в шапке ----------
@@ -959,14 +973,10 @@ const Chat = (() => {
     if (!msg) return;
     const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
     msg.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
-    // Нажатый пункт подсвечиваем сразу и держим, пока идёт прокрутка
-    // (иначе у конца ленты подсветка прыгнула бы на последний вопрос)
-    el.outlineList.querySelectorAll(".outline__item").forEach((x) =>
-      (x === b ? x.setAttribute("aria-current", "true") : x.removeAttribute("aria-current")));
-    // Удержание снимается, когда прокрутка закончилась (scrollend); таймер — на случай, если прокрутки не было
+    // Нажатый пункт отмечаем сразу — красная метка скользит к нему — и держим, пока клиент сам не начнёт листать
+    // (иначе у конца ленты и при коротких ответах отметка перескочила бы на соседний вопрос)
+    setOutlineCurrent(b);
     outlinePinned = b;
-    clearTimeout(pinTimer);
-    pinTimer = setTimeout(() => { outlinePinned = null; }, 1500);
     // Короткая подсветка самого вопроса — видно, куда привело нажатие, даже если лента не сдвинулась
     msg.classList.remove("msg--flash");
     void msg.offsetWidth; // перезапуск анимации при повторном нажатии
@@ -974,7 +984,14 @@ const Chat = (() => {
     msg.addEventListener("animationend", () => msg.classList.remove("msg--flash"), { once: true });
   });
   el.scroll.addEventListener("scroll", () => requestAnimationFrame(markOutline), { passive: true });
-  el.scroll.addEventListener("scrollend", () => { outlinePinned = null; clearTimeout(pinTimer); });
+  // Выбранный нажатием пункт держим, пока клиент сам не начнёт листать: колесо, палец, клавиши, полоса прокрутки.
+  // По одному лишь окончанию прокрутки снимать нельзя: при коротких ответах выше линии чтения оказывается
+  // сразу несколько вопросов, и метка съезжала с нажатого пункта на соседний
+  for (const type of ["wheel", "touchmove", "keydown", "pointerdown"]) {
+    el.scroll.addEventListener(type, () => { outlinePinned = null; }, { passive: true });
+  }
+  // Окно изменили — пункты оглавления могли перенестись на другую строку, метку ставим заново
+  window.addEventListener("resize", () => requestAnimationFrame(moveOutlineMarker));
 
   // Esc: сначала закрывает выехавший список диалогов, потом сам чат
   document.addEventListener("keydown", (e) => {

@@ -96,7 +96,8 @@ const MockServer = (() => {
 
   function createSession(db) {
     // Вошедший клиент: сессия запоминает его номер, чтобы попасть в «Ваши диалоги» (GET /api/me/sessions)
-    const s = { session_id: newId(), created_at: now(), updated_at: now(), lead_id: null, client_phone: isAuth() ? PHONE : null, messages: [] };
+    // Гость: настоящий сервер узнаёт его браузер по cookie; в заглушке хранилище и так своё у каждого браузера — хватает пометки
+    const s = { session_id: newId(), created_at: now(), updated_at: now(), lead_id: null, client_phone: isAuth() ? PHONE : null, guest: !isAuth(), messages: [] };
     db.sessions.push(s);
     return s;
   }
@@ -217,12 +218,13 @@ const MockServer = (() => {
     }
     if (method === "GET" && path === "/api/sessions") return listSessions(db);
     if (method === "GET" && path === "/api/me/sessions") {
-      return isAuth() ? listSessions(db, (s) => s.client_phone === PHONE) : [];
+      // Вошедший клиент — диалоги по номеру и начатые в этом браузере; гость — только начатые в этом браузере
+      return listSessions(db, (s) => s.guest || (isAuth() && s.client_phone === PHONE));
     }
     if (method === "GET" && (m = path.match(/^\/api\/sessions\/(\w+)$/))) {
       const s = db.sessions.find((x) => x.session_id === m[1]);
       if (!s) throw new ApiError(404, "Сессия не найдена");
-      const { client_phone, ...pub } = s; // номер клиента наружу не отдаём
+      const { client_phone, guest, ...pub } = s; // номер клиента и пометку гостя наружу не отдаём
       return pub;
     }
     if (method === "POST" && path === "/api/chat") return chat(db, body);

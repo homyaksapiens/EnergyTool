@@ -59,20 +59,21 @@
 
     <section class="solutions" id="solutions">
       <h2>С чем помогает консультант</h2>
-      <!-- Каждая строка открывает чат и сразу задаёт вопрос по направлению -->
+      <!-- Каждая строка открывает чат и сразу задаёт вопрос по направлению.
+           Скрытая подпись «— спросить консультанта» — для экранной читалки: зрячим это показывает стрелка -->
       <ul class="solution-list">
         <li><button type="button" data-ask="Как выйти на оптовый рынок электроэнергии и что для этого нужно?">
-          <strong>Выход на оптовый рынок</strong><span>Когда покупать электроэнергию напрямую выгоднее</span><em>Спросить <i data-icon="arrow"></i></em></button></li>
+          <strong>Выход на оптовый рынок</strong><span>Когда покупать электроэнергию напрямую выгоднее</span><span class="sr-only">— спросить консультанта</span><i data-icon="chevron"></i></button></li>
         <li><button type="button" data-ask="У нас несколько объектов. Можно смотреть их расход в одном кабинете?">
-          <strong>Облачная платформа учёта</strong><span>Показания всех объектов в одном кабинете</span><em>Спросить <i data-icon="arrow"></i></em></button></li>
+          <strong>Облачная платформа учёта</strong><span>Показания всех объектов в одном кабинете</span><span class="sr-only">— спросить консультанта</span><i data-icon="chevron"></i></button></li>
         <li><button type="button" data-ask="Хотим поставить солнечную станцию на предприятии. С чего начать?">
-          <strong>Солнечные станции</strong><span>Сетевые и гибридные, с накопителями</span><em>Спросить <i data-icon="arrow"></i></em></button></li>
+          <strong>Солнечные станции</strong><span>Сетевые и гибридные, с накопителями</span><span class="sr-only">— спросить консультанта</span><i data-icon="chevron"></i></button></li>
         <li><button type="button" data-ask="В нашей сети большие потери. Как найти, где теряется электроэнергия?">
-          <strong>Поиск коммерческих потерь</strong><span>Для сетевых организаций и СНТ</span><em>Спросить <i data-icon="arrow"></i></em></button></li>
+          <strong>Поиск коммерческих потерь</strong><span>Для сетевых организаций и СНТ</span><span class="sr-only">— спросить консультанта</span><i data-icon="chevron"></i></button></li>
         <li><button type="button" data-ask="Можно ли передавать показания счётчиков по фото?">
-          <strong>Показания по фото</strong><span>Распознавание показаний счётчиков</span><em>Спросить <i data-icon="arrow"></i></em></button></li>
+          <strong>Показания по фото</strong><span>Распознавание показаний счётчиков</span><span class="sr-only">— спросить консультанта</span><i data-icon="chevron"></i></button></li>
         <li><button type="button" data-ask="Почему вырос счёт за электроэнергию, хотя потребление не изменилось?">
-          <strong>Вырос счёт за электроэнергию</strong><span>Ценовые категории, пиковые часы, мощность</span><em>Спросить <i data-icon="arrow"></i></em></button></li>
+          <strong>Вырос счёт за электроэнергию</strong><span>Ценовые категории, пиковые часы, мощность</span><span class="sr-only">— спросить консультанта</span><i data-icon="chevron"></i></button></li>
       </ul>
     </section>
 
@@ -86,9 +87,34 @@
     </section>
   </main>
 
+  <!-- Подвал: контакты-заглушки и служебные ссылки. Телефон выдуманный -->
   <footer class="site-footer" id="contacts">
-    <p>Учебный проект для хакатона True Tech Hack&amp;Change 2026. Не официальный сайт МТС.</p>
-    <a href="manager.html">Панель менеджера</a>
+    <div class="site-footer__inner">
+      <div class="site-footer__top">
+        <div class="site-footer__brand">
+          <a class="wordmark" href="#top" aria-label="EnergyTool, наверх">
+            <span class="brand-mark" data-icon="bolt"></span>
+            <span>EnergyTool</span>
+          </a>
+          <p><strong>Решения для энергетики бизнеса</strong></p>
+          <p>Учёт, затраты и потери электроэнергии</p>
+        </div>
+        <dl class="site-footer__contacts">
+          <div><dt>Консультация</dt><dd><button class="site-footer__link" type="button" data-open-chat>в чате на сайте</button></dd></div>
+          <div><dt>Заявки</dt><dd>+7 (000) 000-00-00</dd></div>
+        </dl>
+        <button class="btn btn-primary btn-lg" type="button" data-open-chat="lead">Оставить заявку</button>
+      </div>
+      <div class="site-footer__legal">
+        <p>Учебный проект для хакатона True Tech Hack&amp;Change 2026. Не официальный сайт МТС: контакты на этой
+          странице — заглушки. Заявка отправляется только с вашего согласия: ФИО, телефон и название компании
+          получает менеджер для связи по этой заявке.</p>
+        <nav class="site-footer__nav" aria-label="Служебные ссылки">
+          <a href="privacy.html">Как мы храним данные</a>
+          <a href="manager.html">Панель менеджера</a>
+        </nav>
+      </div>
+    </div>
   </footer>
 
   <!-- ===================== Чат на весь экран ===================== -->
@@ -120,8 +146,8 @@
     </header>
 
     <div class="chat__body">
-      <!-- Слева: «Новый диалог» и прошлые диалоги вошедшего клиента (GET /api/me/sessions).
-           Гостю — подсказка, как их увидеть -->
+      <!-- Слева: «Новый диалог» и прошлые диалоги клиента (GET /api/me/sessions).
+           Гостя сервер узнаёт по метке браузера, вошедшего клиента — ещё и по номеру -->
       <aside class="dialogs" id="dialogs" aria-label="Ваши диалоги">
         <button class="btn btn-secondary dialogs__new" type="button" id="new-chat-btn">
           <span data-icon="plus"></span>Новый диалог
@@ -164,10 +190,10 @@
         </form>
       </div>
 
-      <!-- Справа: оглавление — вопросы клиента в этом разговоре. Полупрозрачное, пока на него не навели;
-           нажатие прокручивает ленту к вопросу. Скрыто, пока вопросов нет -->
+      <!-- Справа: оглавление — вопросы клиента в этом разговоре. Красная метка слева показывает вопрос,
+           который сейчас на экране; нажатие прокручивает ленту к вопросу. Скрыто, пока вопросов нет -->
       <nav class="outline" id="outline" aria-label="Оглавление разговора" hidden>
-        <p class="outline__title">В этом разговоре</p>
+        <p class="outline__title">Ваш разговор</p>
         <ol class="outline__list" id="outline-list"></ol>
       </nav>
     </div>

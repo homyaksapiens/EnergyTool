@@ -89,29 +89,40 @@ body.chat-open { overflow: hidden; } /* страница под чатом не 
 .dialogs__debug { margin-top: auto; padding: 8px 10px 0; flex: none; }
 
 /* ---------- Справа: оглавление разговора ---------- */
-/* «Полупрозрачное»: текст приглушён, пока на колонку не навели или не перешли в неё с клавиатуры.
-   Приглушение — цвет с прозрачностью, а не opacity: так контраст остаётся не ниже 4,5 */
-.outline { min-height: 0; overflow-y: auto; padding: 28px 20px 16px 4px; }
-.outline__title { margin: 0 0 8px 8px; font-size: 13px; font-weight: 700; color: rgba(29, 32, 35, 0.62); transition: color 0.2s; }
-.outline__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+/* Вопросы клиента в этом разговоре: слева серая линия, у текущего вопроса — красная метка.
+   Левое поле 8 px — чтобы рамка фокуса с клавиатуры не срезалась краем колонки */
+.outline { min-height: 0; overflow-y: auto; padding: 28px 20px 16px 8px; }
+.outline__title { margin: 0 0 12px; font-size: 14px; font-weight: 700; color: var(--muted); }
+/* Пункты стоят вплотную: их левые границы складываются в одну вертикальную линию */
+.outline__list { position: relative; list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+/* Красная метка текущего вопроса — одна на весь список. Она не перескакивает, а скользит по серой линии
+   к новому пункту и подстраивается под его высоту. Положение и высоту задаёт chat.js (moveOutlineMarker) */
+.outline__list::before {
+  content: ""; position: absolute; left: 0; top: 0; z-index: 1;
+  width: 2px; height: var(--marker-h, 0px);
+  background: var(--accent);
+  transform: translateY(var(--marker-y, 0px));
+  opacity: 0;
+  transition: transform 0.4s var(--ease-out), height 0.4s var(--ease-out), opacity 0.2s;
+}
+.outline__list.has-marker::before { opacity: 1; }
 .outline__item {
-  width: 100%; display: flex; gap: 10px;
-  padding: 6px 8px; border: 0; border-radius: 8px;
+  width: 100%; display: block;
+  padding: 8px 8px 8px 14px; border: 0; border-left: 2px solid var(--line); border-radius: 0;
   background: none; text-align: left; cursor: pointer;
-  font-size: 13px; line-height: 1.4; color: rgba(29, 32, 35, 0.62);
-  transition: color 0.2s, background-color 0.15s;
+  font-size: 15px; line-height: 1.4; color: var(--text);
+  transition: color 0.2s;
 }
-.outline__item span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-/* Точка-маркер: у вопроса, который сейчас на экране, — красная */
-.outline__item::before {
-  content: ""; flex: none; width: 6px; height: 6px; margin-top: 6px; border-radius: 50%;
-  background: currentColor; opacity: 0.45;
+/* Текст пункта чуть сдвигается к центру при наведении и у текущего вопроса; при нажатии — поджимается обратно */
+.outline__item span {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  transition: transform 0.25s var(--ease-out);
 }
-.outline:hover .outline__title, .outline:focus-within .outline__title,
-.outline:hover .outline__item, .outline:focus-within .outline__item { color: var(--text); }
-.outline__item:hover { background: rgba(29, 32, 35, 0.05); }
-.outline__item[aria-current="true"] { color: var(--text); font-weight: 700; }
-.outline__item[aria-current="true"]::before { background: var(--accent); opacity: 1; }
+.outline__item:hover span, .outline__item[aria-current="true"] span { transform: translateX(3px); }
+.outline__item:active span { transform: translateX(1px); }
+/* Наведение — красный текст; вопрос, который сейчас на экране, — жирный красный текст и красная метка */
+.outline__item:hover { color: var(--link); }
+.outline__item[aria-current="true"] { color: var(--link); font-weight: 700; }
 
 /* Вопрос, к которому прокрутили из оглавления, не прилипает к верхнему краю */
 .msg--user { scroll-margin-top: 24px; }
@@ -141,9 +152,9 @@ body.chat-open { overflow: hidden; } /* страница под чатом не 
 .msg { display: flex; flex-direction: column; max-width: 86%; animation: msg-in 0.35s var(--ease-out); }
 .msg--user { align-self: flex-end; align-items: flex-end; }
 .msg--bot { align-self: flex-start; }
-.msg__bubble { padding: 12px 16px; font-size: 16px; line-height: 1.55; overflow-wrap: anywhere; }
-.msg--bot .msg__bubble { background: var(--card); border-radius: 22px 22px 22px 6px; box-shadow: var(--shadow-widget); }
-.msg--user .msg__bubble { background: var(--user-bubble); color: var(--user-bubble-text); border-radius: 22px 22px 6px 22px; }
+.msg__bubble { padding: 12px 20px; font-size: 16px; line-height: 1.55; overflow-wrap: anywhere; }
+.msg--bot .msg__bubble { background: var(--card); border-radius: var(--r-md) var(--r-md) var(--r-md) 4px; box-shadow: var(--shadow-widget); }
+.msg--user .msg__bubble { background: var(--user-bubble); color: var(--user-bubble-text); border-radius: var(--r-md) var(--r-md) 4px var(--r-md); }
 .msg--user .msg__bubble::selection, .msg--user .msg__bubble *::selection { background: var(--user-bubble-text); color: var(--user-bubble); }
 
 /* Ожидание ответа */
@@ -167,7 +178,7 @@ body.chat-open { overflow: hidden; } /* страница под чатом не 
 /* Быстрые кнопки под приветствием */
 .chips { display: flex; flex-wrap: wrap; gap: 8px; animation: msg-in 0.35s var(--ease-out) 0.08s both; }
 .chip {
-  min-height: 40px; padding: 8px 16px; border-radius: 999px;
+  min-height: 40px; padding: 8px 18px; border-radius: var(--r-sm);
   border: 0; background: var(--card); box-shadow: var(--shadow-widget);
   font-weight: 600; font-size: 14px; text-align: left; cursor: pointer;
   transition: box-shadow 0.15s, color 0.15s;
@@ -181,14 +192,14 @@ body.chat-open { overflow: hidden; } /* страница под чатом не 
 .chat.is-debug .debug { display: block; }
 .debug__summary {
   display: inline-flex; align-items: center; gap: 6px;
-  min-height: 32px; padding: 4px 10px; border: 0; border-radius: 999px;
+  min-height: 32px; padding: 4px 12px; border: 0; border-radius: 8px;
   background: var(--soft); color: var(--text); box-shadow: var(--shadow-widget);
   font-size: 13px; font-weight: 600; cursor: pointer;
 }
 .debug__summary .icon { width: 15px; height: 15px; }
 .debug__summary span + .icon { margin-left: 6px; }
 .debug__summary:hover { background: var(--soft-hover); }
-.debug__badge { margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: var(--text); color: var(--white); }
+.debug__badge { margin-left: 6px; padding: 1px 8px; border-radius: 6px; background: var(--text); color: var(--white); }
 .debug__details {
   margin-top: 8px; padding: 12px 14px;
   background: var(--card); border: 1px solid var(--line); border-radius: var(--r-md);
@@ -207,7 +218,7 @@ body.chat-open { overflow: hidden; } /* страница под чатом не 
 .lead-card, .lead-done {
   align-self: stretch;
   background: var(--card); border-radius: var(--r-lg);
-  padding: 24px; box-shadow: var(--shadow);
+  padding: 24px 32px; box-shadow: var(--shadow);
   animation: msg-in 0.4s var(--ease-out);
 }
 .lead-card { display: flex; flex-direction: column; gap: 14px; }
@@ -218,8 +229,8 @@ body.chat-open { overflow: hidden; } /* страница под чатом не 
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field__label { font-size: 14px; font-weight: 700; }
 .field input {
-  min-height: 48px; padding: 10px 14px;
-  border: 1px solid var(--control); border-radius: var(--r-sm); background: var(--white);
+  min-height: 48px; padding: 10px 18px;
+  border: 1px solid var(--control); border-radius: var(--r-btn); background: var(--white);
   font-size: 16px; /* не меньше 16, иначе iPhone приближает страницу при вводе */
   transition: border-color 0.15s;
 }
@@ -231,8 +242,8 @@ body.chat-open { overflow: hidden; } /* страница под чатом не 
 /* Номер из профиля: строка с номером и кнопкой «Другой номер» */
 .phone-profile {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
-  min-height: 48px; padding: 8px 14px;
-  background: var(--soft); box-shadow: var(--shadow-widget); border-radius: var(--r-sm);
+  min-height: 48px; padding: 8px 18px;
+  background: var(--soft); box-shadow: var(--shadow-widget); border-radius: var(--r-btn);
 }
 .phone-profile .icon { color: var(--accent); }
 .phone-profile strong { font-size: 16px; }
@@ -252,15 +263,15 @@ body.chat-open { overflow: hidden; } /* страница под чатом не 
 .lead-done__icon { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border-radius: 50%; background: var(--accent); color: var(--white); }
 .lead-done details { margin-top: 12px; }
 .lead-done summary { cursor: pointer; font-weight: 700; color: var(--link); font-size: 14px; }
-.lead-done__summary { margin-top: 8px; padding: 12px 14px; background: var(--soft); box-shadow: var(--shadow-widget); border-radius: var(--r-md); font-size: 14px; line-height: 1.6; }
+.lead-done__summary { margin-top: 8px; padding: 14px 20px; background: var(--soft); box-shadow: var(--shadow-widget); border-radius: var(--r-md); font-size: 14px; line-height: 1.6; }
 
 /* ---------- Поле ввода ---------- */
 .composer { padding: 8px 20px max(12px, env(safe-area-inset-bottom)); background: linear-gradient(transparent, var(--bg) 30%); }
 .composer__box {
   max-width: 720px; margin: 0 auto;
   display: flex; align-items: flex-end; gap: 8px;
-  padding: 6px 6px 6px 18px;
-  background: var(--card); border-radius: 28px;
+  padding: 6px 6px 6px 20px;
+  background: var(--card); border-radius: 18px;
   box-shadow: var(--shadow-float);
   transition: box-shadow 0.15s;
 }
@@ -334,7 +345,7 @@ body:has(.sketch) .dialogs { padding-bottom: 64px; }
   .chat__feed { padding: 16px 12px; }
   .msg { max-width: 92%; }
   .composer { padding-left: 10px; padding-right: 10px; }
-  .lead-card, .lead-done { padding: 18px; }
+  .lead-card, .lead-done { padding: 18px 20px; }
   .sketch { left: auto; right: 8px; bottom: auto; top: 64px; max-width: 260px; } /* на телефоне — под шапкой, не над полем ввода */
 }
 

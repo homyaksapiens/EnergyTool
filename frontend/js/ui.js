@@ -13,6 +13,7 @@ const UI = (() => {
     clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
     retry: '<path d="M4 12a8 8 0 0 1 14-5.3L20 9"/><path d="M20 4v5h-5"/><path d="M20 12a8 8 0 0 1-14 5.3L4 15"/><path d="M4 20v-5h5"/>',
     arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+    chevron: '<path d="m9 5 7 7-7 7"/>', // наконечник стрелки без древка: «строку можно открыть»
     back: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
     phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2Z"/>',
