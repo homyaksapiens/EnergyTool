@@ -160,6 +160,10 @@ class ApiTest(unittest.TestCase):
         self.assertFalse(leads.should_offer_lead("Счёт вырос", "Расчёт подготовит специалист.", 1))
         self.assertTrue(leads.should_offer_lead("Пять магазинов", "Расчёт подготовит специалист.", 2))
         self.assertFalse(leads.should_offer_lead("Пять магазинов", "Какие у вас счётчики?", 3))
+        # клиент отказался — не предлагаем, даже если бот упомянул специалиста
+        self.assertFalse(leads.should_offer_lead("Не хочу оставлять заявку, просто расскажите", "Расчёт подготовит специалист.", 3))
+        self.assertFalse(leads.should_offer_lead("Давайте пока без звонков и менеджеров", "Хорошо.", 2))
+        self.assertFalse(leads.should_offer_lead("Телефон оставлять не буду", "Точный расчёт сделает менеджер.", 4))
 
     def test_offer_lead_stops_after_lead(self):
         body = self.ask("Свяжите меня с менеджером").json()
