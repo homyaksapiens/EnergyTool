@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-MAX_CHUNK_CHARS = 1800
+MAX_CHUNK_CHARS = 2500
 
 
 @dataclass
@@ -112,9 +112,9 @@ def normalize_tables(text: str) -> str:
 
 
 def normalize(text: str) -> str:
-    text = normalize_tables(text)
-    text = text.replace("---", "—").replace("--", "–").replace("**", "")
-    return re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"\\+(#{1,3}\s+)", r"\n\1", text)
+    text = text.replace("\u00a0", " ").replace("—", "-").replace("–", "-")
+    return re.sub(r"[ \t]+", " ", text).strip()
 
 
 HEAD_RE = re.compile(r"^(#{1,4})\s+(.*\S)\s*$")
