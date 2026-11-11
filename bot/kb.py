@@ -178,8 +178,17 @@ SUFFIXES = sorted(set("""ами ями ого его ому ему ыми ими
                   key=len, reverse=True)
 
 
+PREFIXES = ("четырех", "много", "одно", "двух", "трех")
+
+
 def stem(word: str) -> str:
     """Грубый стемминг для русского: срезаем окончание и ограничиваем длину основы."""
+    if word.startswith("фотограф"):
+        return "фото"
+    for prefix in PREFIXES:
+        if word.startswith(prefix) and len(word) - len(prefix) >= 5:
+            word = word[len(prefix):]
+            break
     if len(word) <= 4 or word.isdigit():
         return word
     for suffix in SUFFIXES:

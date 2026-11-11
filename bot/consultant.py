@@ -41,12 +41,13 @@ def parse_dialog(text: str) -> list[dict]:
 
 
 def search_queries(messages: list[dict]) -> list[str]:
-    """Запросы к базе: последняя реплика клиента и (для диалога) весь диалог — реплики ассистента
-    часто называют продукт, о котором идёт речь («сервис для выездных проверок»)."""
+    """В коротких консультационных диалогах (по 3 реплики клиента) all_users — это чистая,
+    обновляемая на каждом шаге смысловая линия клиента без воды и шаблонных фраз ассистента.
+    """
     users = [m["content"] for m in messages if m["role"] == "user"]
-    last = users[-1] if users else ""
+    all_users = " ".join(users)
     full = " ".join(m["content"] for m in messages)
-    return [last] if full == last else [last, full]
+    return [all_users] if full == all_users else [all_users, full]
 
 
 def clean_answer(text: str) -> str:
