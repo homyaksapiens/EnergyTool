@@ -41,13 +41,14 @@ def parse_dialog(text: str) -> list[dict]:
 
 
 def search_queries(messages: list[dict]) -> list[str]:
-    """В коротких консультационных диалогах (по 3 реплики клиента) all_users — это чистая,
-    обновляемая на каждом шаге смысловая линия клиента без воды и шаблонных фраз ассистента.
-    """
-    users = [m["content"] for m in messages if m["role"] == "user"]
-    all_users = " ".join(users)
+    """Запросы к базе: для одиночного вопроса — он сам; для диалога — актуальное окно
+    последних реплик (детали клиента + вопрос ассистента + ответ клиента) и весь диалог целиком."""
+    if len(messages) <= 1:
+        return [messages[0]["content"]] if messages else [""]
+    tail = messages[-3:] if len(messages) > 3 else messages[-2:]
+    recent = " ".join(m["content"] for m in tail)
     full = " ".join(m["content"] for m in messages)
-    return [all_users] if full == all_users else [all_users, full]
+    return [recent] if recent == full else [recent, full]
 
 
 def clean_answer(text: str) -> str:

@@ -245,19 +245,21 @@ class KnowledgeBase:
         self.vectors = _unit(vectors)
 
     def search(self, queries: list[str], query_vectors=None, k: int = 16) -> list[Chunk]:
-        """Гибридный поиск: по каждому запросу свой список BM25 (+ векторный), затем RRF."""
-        ranked: list[list[int]] = []
+        """Гибридный поиск: по каждому запросу свой список BM25 (+ векторный с повышенным весом), затем RRF."""
+        fused: Counter = Counter()
         for query in queries:
             scores = self.bm25.scores(tokenize(query))
-            ranked.append([int(i) for i in np.argsort(-scores)[:50] if scores[i] > 0])
+            order = [int(i) for i in np.argsort(-scores)[:50] if scores[i] > 0]
+            for rank, i in enumerate(order):
+                fused[i] += 1.0 / (60 + rank)  # вес BM25 = 1.0
+
         if self.vectors is not None and query_vectors:
             for vector in query_vectors:
                 if vector is None:
                     continue
                 sims = self.vectors @ _unit(np.asarray(vector, dtype=np.float32))
-                ranked.append([int(i) for i in np.argsort(-sims)[:50]])
-        fused: Counter = Counter()
-        for order in ranked:
-            for rank, i in enumerate(order):
-                fused[i] += 1.0 / (60 + rank)
+                order = [int(i) for i in np.argsort(-sims)[:50]]
+                for rank, i in enumerate(order):
+                    fused[i] += 1.8 / (60 + rank)  # вес BGE-M3 = 1.8 (приоритет смыслу)
+
         return [self.chunks[i] for i, _ in fused.most_common(k)]
