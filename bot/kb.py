@@ -1,9 +1,6 @@
 """База знаний: загрузка из zip, разбор pandoc-таблиц, нарезка по заголовкам, гибридный поиск.
 
 Поиск — BM25 (всегда) + эмбеддинги bge-m3 (если эмбеддер доступен), списки объединяются через RRF.
-
-Распаковывает архив knowledge-base.zip, превращает таблицы в удобный текст, режет файлы по заголовкам ## на кусочки (чанки)
-и ищет по ним двумя способами: по ключевым словам (BM25) и по смыслу через эмбеддинги (bge-m3).
 """
 
 from __future__ import annotations
@@ -19,6 +16,14 @@ import numpy as np
 
 MAX_CHUNK_CHARS = 1950
 
+# Шаблонные названия концовок/общих подразделов, которые не должны дублироваться из разных файлов
+SINGLETON_LEAVES = {
+    "следующий шаг",
+    "с чего начинается разговор",
+    "с чего начать",
+    "сколько стоит расчёт",
+}
+
 
 @dataclass
 class Chunk:
@@ -29,6 +34,34 @@ class Chunk:
 
     def render(self) -> str:
         return f"{self.title}\n{self.text}"
+
+
+def diversify_chunks(chunks: list[Chunk], limit: int) -> list[Chunk]:
+    """Не даёт одноимённым шаблонным подразделам (например, 4 штукам «→ Следующий шаг» или «→ Сколько это стоит»
+    из разных файлов) вытеснить содержательные чанки из топ-выдачи. Чанки из одного файла не ограничиваются.
+    """
+    selected: list[Chunk] = []
+    leaf_sources: dict[str, set[str]] = defaultdict(set)
+
+    for c in chunks:
+        if " → " in c.title:
+            leaf = c.title.rsplit(" → ", 1)[-1].strip().lower()
+            max_files = 1 if leaf in SINGLETON_LEAVES else 2
+            if c.source not in leaf_sources[leaf] and len(leaf_sources[leaf]) >= max_files:
+                continue
+            leaf_sources[leaf].add(c.source)
+        selected.append(c)
+        if len(selected) >= limit:
+            return selected
+
+    if len(selected) < limit:
+        used_ids = {c.id for c in selected}
+        for c in chunks:
+            if c.id not in used_ids:
+                selected.append(c)
+                if len(selected) >= limit:
+                    break
+    return selected
 
 
 # ---------- загрузка и нормализация ----------
@@ -256,4 +289,5 @@ class KnowledgeBase:
                 for rank, i in enumerate(order):
                     fused[i] += 1.8 / (60 + rank)  # вес BGE-M3 = 1.8 (приоритет смыслу)
 
-        return [self.chunks[i] for i, _ in fused.most_common(k)]
+        ranked_chunks = [self.chunks[i] for i, _ in fused.most_common(k * 2)]
+        return diversify_chunks(ranked_chunks, k)
