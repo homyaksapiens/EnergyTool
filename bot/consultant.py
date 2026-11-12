@@ -2,6 +2,9 @@
 
 Используется и в solution.py (автосабмит), и в веб-бэкенде. Tool calling не используем: прокси
 платформы его не гарантирует, а лишние вызовы LLM съедают лимит времени.
+
+Берет вопрос клиента, ищет подходящие куски текста через kb.py, пропускает их через реранкер (если он доступен),
+подставляет в шаблон промпта и отправляет в языковую модель.
 """
 from __future__ import annotations
 
@@ -10,7 +13,7 @@ import sys
 import time
 
 import llm_client
-from kb import Chunk, KnowledgeBase, diversify_chunks
+from kb import Chunk, KnowledgeBase
 from prompts import FALLBACK_ANSWER, build_system
 from settings import CANDIDATES, CONTEXT_CHUNKS, MAX_TOKENS, TEMPERATURE, USE_RERANK
 
@@ -38,9 +41,9 @@ def parse_dialog(text: str) -> list[dict]:
 
 
 def search_queries(messages: list[dict]) -> list[str]:
-    """Формирует сбалансированные запросы без отрыва темы от вопроса:
-    - Для одиночного вопроса: [last]
-    - Для диалога: [focused (все реплики клиента + последний вопрос ассистента), full (весь диалог)]
+    """Формирует поисковые запросы без размытия весов токенов:
+    - Одиночный вопрос: [last]
+    - Диалог: [глобальная_проблема (1-я реплика), текущий_обмен (вопрос бота + ответ клиента), весь_диалог]
     """
     users = [m["content"].strip() for m in messages if m["role"] == "user" and m["content"].strip()]
     last = users[-1] if users else ""
@@ -48,46 +51,48 @@ def search_queries(messages: list[dict]) -> list[str]:
     if full == last or len(messages) <= 1:
         return [last]
 
-    # Собираем все реплики клиента (чтобы не терять ни исходную задачу U1, ни параметры из середины U2)
-    # плюс последний уточняющий вопрос ассистента перед ответом клиента (например, «А какая у вас ценовая категория?»)
-    parts = list(users[:-1])
+    global_problem = users[0] if users else last
     if len(messages) >= 2 and messages[-2]["role"] == "assistant":
-        parts.append(messages[-2]["content"].strip())
-    parts.append(last)
-    focused = " ".join(p for p in parts if p).strip()
+        last_exchange = f"{messages[-2]['content'].strip()} {last}".strip()
+    else:
+        last_exchange = last
 
-    return [focused, full] if focused != full else [full]
+    queries: list[str] = []
+    for q in (global_problem, last_exchange, full):
+        if q and q not in queries:
+            queries.append(q)
+    return queries
 
 
 def format_dialog_sandwich(messages: list[dict]) -> list[dict]:
-    """Для одиночного вопроса возвращает messages как есть.
-    Для многоходового диалога сохраняет историю и добавляет в конец точное напоминание правил SYSTEM_PROMPT,
-    чтобы модель не копировала короткий (6-10 слов) стиль промежуточных реплик и связывала всю задачу целиком.
+    """Техника «сэндвича» для многоходовых диалогов:
+    фиксирует глобальную задачу клиента, сводку уже известных фактов и напоминает правила SYSTEM_PROMPT в конце.
+    Для одиночных вопросов возвращает messages без изменений.
     """
     if len(messages) <= 1:
         return messages
 
     users = [m["content"].strip() for m in messages if m["role"] == "user" and m["content"].strip()]
-    initial_task = users[0] if users else messages[0]["content"].strip()
-    known_facts = " ".join(users[:-1]) if len(users) > 1 else initial_task
+    global_goal = users[0] if users else messages[0]["content"].strip()
+    known_facts = " ".join(users)
+    last_reply = messages[-1]["content"].strip()
 
     history_lines = [
         f"{'Клиент' if m['role'] == 'user' else 'Консультант'}: {m['content'].strip()}"
-        for m in messages
+        for m in messages[:-1]
     ]
-    dialog_text = "\n".join(history_lines)
+    history_block = "\n".join(history_lines)
 
     sandwich_prompt = (
-        f"Диалог с клиентом:\n{dialog_text}\n\n"
-        f"Сводка контекста: исходная задача клиента — «{initial_task}»; "
-        f"уже сообщённые клиентом вводные — «{known_facts}».\n"
-        f"Инструкция для ответа на последнюю реплику клиента: дай полный, содержательный ответ (3–4 предложения, "
-        f"около 40–55 слов, связным текстом без списков и markdown) строго по материалам EnergyTool. "
-        f"Начни сразу с сути ответа на последний вопрос (без лишнего «Да, …», если вопрос открытый или с условием), "
-        f"свяжи исходную задачу клиента с деталями из последних реплик (если подходят два наших решения — укажи оба), "
-        f"приведи конкретные условия, составляющие и важные оговорки из материалов. "
-        f"Если для подбора решения или оценки всё ещё не хватает данных — закончи одним уточняющим вопросом, "
-        f"не спрашивая то, что клиент уже сообщил."
+        f"Исходная задача клиента (глобальная тема): {global_goal}\n"
+        f"Все факты, которые клиент уже сообщил о себе и объекте: {known_facts}\n\n"
+        f"Предыдущие реплики диалога:\n{history_block}\n\n"
+        f"Последняя реплика клиента (ответь на неё):\n{last_reply}\n\n"
+        f"Напоминание правил ответа: ответь на последнюю реплику клиента с учётом его исходной задачи и всех "
+        f"сообщённых им фактов строго по материалам EnergyTool. Начни с прямого ответа по сути («Да, …», «Нет, …» "
+        f"или сама суть), затем 1–2 предложения: от чего зависит результат для ситуации клиента или важная оговорка. "
+        f"Объём — 2–4 предложения, 30–70 слов, обычный связный текст без списков и markdown. В конце задай один "
+        f"уточняющий вопрос для подбора решения, но НЕ спрашивай то, что клиент уже сообщил выше."
     )
     return [{"role": "user", "content": sandwich_prompt}]
 
@@ -114,23 +119,16 @@ class Consultant:
         candidates = self.kb.search(queries, query_vectors, k=CANDIDATES)
         if self.rerank_ok and len(candidates) > CONTEXT_CHUNKS:
             try:
-                # В реранкер передаём сфокусированный запрос queries[0] и ранжируем все кандидаты,
-                # после чего отсекаем дубли шаблонных подзаголовков («Следующий шаг», «Сколько это стоит»)
-                order = llm_client.rerank(
-                    queries[0][:2000],
-                    [c.render()[:2000] for c in candidates],
-                    len(candidates),
-                )
+                order = llm_client.rerank(queries[-1][:2000], [c.render()[:2000] for c in candidates], CONTEXT_CHUNKS)
                 if order:
-                    reranked_chunks = [candidates[i] for i in order]
-                    return diversify_chunks(reranked_chunks, CONTEXT_CHUNKS), True
+                    return [candidates[i] for i in order][:CONTEXT_CHUNKS], True
             except llm_client.ApiError as e:
                 if e.status in (400, 404, 405, 422, 501):  # эндпоинта нет — больше не пробуем
                     self.rerank_ok = False
                 print(f"Реранкер недоступен: {e}", file=sys.stderr)
             except (KeyError, TypeError, ValueError) as e:
                 print(f"Реранкер вернул неожиданный ответ: {e!r}", file=sys.stderr)
-        return diversify_chunks(candidates, CONTEXT_CHUNKS), False
+        return candidates[:CONTEXT_CHUNKS], False
 
     def answer(self, messages: list[dict], query_vectors=None, deadline: float | None = None) -> dict:
         """Ответ на последнюю реплику клиента: {text, sources, timings, reranked, fallback}."""
