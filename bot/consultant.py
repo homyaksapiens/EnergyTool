@@ -114,26 +114,33 @@ class Consultant:
         self.kb = kb
         self.rerank_ok = use_rerank
 
-    def retrieve(self, messages: list[dict], query_vectors=None) -> tuple[list[Chunk], bool]:
+    def _retrieve_detailed(
+        self, messages: list[dict], query_vectors=None
+    ) -> tuple[list[Chunk], list[Chunk], list[str], bool]:
+        """Возвращает (top6_chunks, top16_candidates, queries, reranked)."""
         queries = search_queries(messages)
         candidates = self.kb.search(queries, query_vectors, k=CANDIDATES)
         if self.rerank_ok and len(candidates) > CONTEXT_CHUNKS:
             try:
                 order = llm_client.rerank(queries[-1][:2000], [c.render()[:2000] for c in candidates], CONTEXT_CHUNKS)
                 if order:
-                    return [candidates[i] for i in order][:CONTEXT_CHUNKS], True
+                    return [candidates[i] for i in order][:CONTEXT_CHUNKS], candidates, queries, True
             except llm_client.ApiError as e:
                 if e.status in (400, 404, 405, 422, 501):  # эндпоинта нет — больше не пробуем
                     self.rerank_ok = False
                 print(f"Реранкер недоступен: {e}", file=sys.stderr)
             except (KeyError, TypeError, ValueError) as e:
                 print(f"Реранкер вернул неожиданный ответ: {e!r}", file=sys.stderr)
-        return candidates[:CONTEXT_CHUNKS], False
+        return candidates[:CONTEXT_CHUNKS], candidates, queries, False
+
+    def retrieve(self, messages: list[dict], query_vectors=None) -> tuple[list[Chunk], bool]:
+        chunks, _, _, reranked = self._retrieve_detailed(messages, query_vectors)
+        return chunks, reranked
 
     def answer(self, messages: list[dict], query_vectors=None, deadline: float | None = None) -> dict:
-        """Ответ на последнюю реплику клиента: {text, sources, timings, reranked, fallback}."""
+        """Ответ на последнюю реплику клиента: {text, sources, candidate_ids, queries, timings, reranked, fallback}."""
         t0 = time.time()
-        chunks, reranked = self.retrieve(messages, query_vectors)
+        chunks, candidates, queries, reranked = self._retrieve_detailed(messages, query_vectors)
         t1 = time.time()
         convo = [{"role": "system", "content": build_system(chunks)}] + format_dialog_sandwich(messages)
         text = ""
@@ -155,6 +162,8 @@ class Consultant:
             "text": text or FALLBACK_ANSWER,
             "fallback": not text,
             "reranked": reranked,
-            "sources": [{"source": c.source, "title": c.title} for c in chunks],
+            "sources": [{"id": c.id, "source": c.source, "title": c.title} for c in chunks],
+            "candidate_ids": [c.id for c in candidates],
+            "queries": queries,
             "timings": {"retrieval": round(t1 - t0, 2), "llm": round(time.time() - t1, 2)},
         }
