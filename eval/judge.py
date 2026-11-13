@@ -17,7 +17,9 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "bot"))
+for _p in (str(ROOT / "bot"), str(ROOT)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from bot.consultant import parse_dialog, search_queries  # noqa: E402
 from eval.run_local import DATA, detect_models, read_csv  # noqa: E402
@@ -43,7 +45,6 @@ JSON_RE = re.compile(r"\{.*?\}", re.S)
 WORD_RAW_RE = re.compile(r"[a-zа-яё0-9]+", re.I)
 DIGIT_RE = re.compile(r"\b\d+(?:[.,]\d+)?\b")
 
-# Служебные вопросительные и вводные основы, которые не считаются новой предметной сущностью в вопросе бота
 QUESTION_FILLER_STEMS = {
     stem(w)
     for w in (
@@ -149,7 +150,6 @@ def compute_meteor(ref_words: list[str], cand_words: list[str]) -> float:
     used_ref: set[int] = set()
     alignment: list[tuple[int, int]] = []
 
-    # Этап 1: Точное совпадение словоформ
     for ci, cw in enumerate(cand_words):
         for ri, rw in enumerate(ref_words):
             if ri not in used_ref and cw == rw:
@@ -159,7 +159,6 @@ def compute_meteor(ref_words: list[str], cand_words: list[str]) -> float:
 
     matched_cand = {ci for ci, _ in alignment}
 
-    # Этап 2: Совпадение после стемминга
     for ci, cs in enumerate(cand_stems):
         if ci in matched_cand:
             continue
@@ -170,7 +169,6 @@ def compute_meteor(ref_words: list[str], cand_words: list[str]) -> float:
                 alignment.append((ci, ri))
                 break
 
-    # Этап 3: Морфологическая близость (Levenshtein ratio >= 82)
     for ci, cw in enumerate(cand_words):
         if ci in matched_cand or len(cw) < 4:
             continue
@@ -213,10 +211,7 @@ def compute_bertscore_and_semsim(
     idf_map: dict[str, float],
     default_idf: float = 2.5,
 ) -> tuple[float, float]:
-    """Возвращает (BERTScore-F1, Whole-Answer Semantic Similarity).
-    Если доступен BGE-M3 — считает настоящий нейросетевой BERTScore (Zhang et al.) с Baseline Rescaling и IDF.
-    Иначе использует символьный TF-IDF фоллбэк.
-    """
+    """Возвращает (BERTScore-F1, Whole-Answer Semantic Similarity)."""
     if not ref_words or not cand_words:
         return 0.0, 0.0
 
@@ -228,10 +223,8 @@ def compute_bertscore_and_semsim(
         cand_mat = np.vstack([scorer.word_vecs[w] for w in cand_words])
         raw_sim = ref_mat @ cand_mat.T
 
-        # Baseline Rescaling (убирает базовую анизотропию мультиязычного трансформера)
         b = scorer.baseline_sim
         sim_matrix = np.clip((raw_sim - b) / max(1.0 - b, 1e-6), 0.0, 1.0)
-        # Точное совпадение слов или их стеммов гарантированно даёт 1.0
         for i, rw in enumerate(ref_words):
             rs = stem(rw)
             for j, cw in enumerate(cand_words):
@@ -246,7 +239,6 @@ def compute_bertscore_and_semsim(
     p_score = float(np.sum(sim_matrix.max(axis=0) * cand_weights) / max(np.sum(cand_weights), 1e-6))
     bert_f1 = _f1(p_score, r_score)
 
-    # Полнотекстовая семантическая близость ответа и эталона
     g_key, a_key = golden_text.strip()[:2000], answer_text.strip()[:2000]
     if scorer.has_bge and g_key in scorer.text_vecs and a_key in scorer.text_vecs:
         sem_sim = float(np.clip(np.dot(scorer.text_vecs[g_key], scorer.text_vecs[a_key]), 0.0, 1.0))
@@ -278,7 +270,6 @@ def _resolve_top6_chunks(
     resolved: list[Chunk] = []
 
     for s in debug_row["sources"]:
-        # 1. Точное совпадение по ID чанка (новые логи debug.jsonl)
         cid = s.get("id")
         if cid is not None and int(cid) in chunk_by_id:
             ch = chunk_by_id[int(cid)]
@@ -286,7 +277,6 @@ def _resolve_top6_chunks(
             used_ids.add(ch.id)
             continue
 
-        # 2. Фоллбэк для старых логов без id: берём ровно один подходящий под-чанк (не склеивая весь раздел!)
         key = (s.get("source", ""), s.get("title", ""))
         candidates_for_key = top16_by_key.get(key) or chunks_by_key.get(key) or []
         chosen = next((c for c in candidates_for_key if c.id not in used_ids), None)
@@ -317,14 +307,12 @@ def evaluate_all_layers(
         return sum(idf_map.get(t, default_idf) for t in tokens)
 
     messages = parse_dialog(question)
-    # Используем реально сохранённые поисковые запросы из лога прогона (если есть)
     queries = (
         debug_row["queries"]
         if (debug_row and debug_row.get("queries"))
         else search_queries(messages)
     )
 
-    # Целевые факты из эталона (токены эталона сверх слов последней реплики клиента)
     last_user_tokens = set(tokenize(messages[-1]["content"]))
     golden_tokens_all = set(tokenize(golden))
     target_facts = golden_tokens_all - last_user_tokens
@@ -340,7 +328,6 @@ def evaluate_all_layers(
 
     top6_chunks = _resolve_top6_chunks(debug_row, chunk_by_id, chunks_by_key, top16_chunks)
 
-    # Гарантируем, что пул Слоя 1 содержит все чанки Слоя 2 (на случай старых логов без candidate_ids)
     seen_ids = {c.id for c in top16_chunks}
     all_candidates = list(top16_chunks)
     for c in top6_chunks:
@@ -372,7 +359,7 @@ def evaluate_all_layers(
         top6_tokens |= ch_toks
         top6_digits |= extract_digits(rendered)
         ov = idf_weight(target_facts & ch_toks) / target_total_idf
-        if ov >= 0.12:  # чанк несёт минимум 12% целевых фактов эталона
+        if ov >= 0.12:
             useful_chunks_6 += 1
         if ov > best_overlap_6:
             best_overlap_6 = ov
@@ -387,8 +374,6 @@ def evaluate_all_layers(
     all_user_tokens = prior_user_tokens | last_user_tokens
     prior_all_tokens = set(tokenize(" ".join(m["content"] for m in messages[:-1]))) if is_dialog else set()
 
-    # 3A. Focused Query Retention: доля фактов из предыдущих реплик клиента (U1..Un-1),
-    # попавших в целевые запросы (без учёта полной склейки всего диалога full)
     focused_queries = queries[:-1] if len(queries) > 1 else queries
     focused_q_tokens = set(tokenize(" ".join(focused_queries)))
     if prior_user_tokens:
@@ -396,8 +381,6 @@ def evaluate_all_layers(
     else:
         focused_history_retention = 1.0
 
-    # 3B. Dialog Context Grounding в ответе: какую долю фактов истории диалога,
-    # упомянутых в эталоне, модель сохранила в своём ответе
     ans_tokens_set = set(tokenize(answer))
     dialog_anchors_in_golden = golden_tokens_all & prior_all_tokens
     if is_dialog and dialog_anchors_in_golden:
@@ -405,8 +388,6 @@ def evaluate_all_layers(
     else:
         dialog_grounding = 1.0
 
-    # 3C. Question Novelty: проверяет, спрашивает ли бот о НОВЫХ предметных параметрах,
-    # не штрафуя его за упоминание контекста клиента в подводке к вопросу.
     question_novelty = 1.0
     if is_dialog and "?" in answer and prior_user_tokens:
         sents = re.split(r"(?<=[.!?])\s+", answer.strip())
@@ -447,7 +428,6 @@ def evaluate_all_layers(
         golden, answer, g_cwords, a_cwords, scorer, idf_map, default_idf
     )
 
-    # Rule Guardrails (включая защиту от выдуманных цифр digits_precision)
     word_count = len(answer.split())
     length_ok = 25 <= word_count <= 85
     no_markdown_lists = (
@@ -615,7 +595,6 @@ def init_kb_and_embeddings(
             q_emb_map = dict(zip(unique_qs, _embed(unique_qs))) if unique_qs else {}
             query_vectors = {qid: [q_emb_map.get(q[:2000]) for q in search_queries(dialogs[qid])] for qid in dialogs}
 
-            # Предрасчёт BGE-M3 эмбеддингов для всех слов и полных ответов (для BERTScore и SemSim)
             eval_words = sorted({w for t in eval_texts for w in content_words(t)})
             if eval_words:
                 raw_w_vecs = _embed(eval_words)
@@ -785,7 +764,6 @@ def main() -> None:
             "base_layers": base_layers,
         })
 
-        # Наглядный послойный вывод по каждому вопросу
         print("=" * 105)
         print(f"ВОПРОС #{qid} | Score: {score:.2f} (Match: {cand_match:.2f} vs Base {base_match:.2f} | WinRate: {win_rate:.2f}) {tag}")
         print("-" * 105)
@@ -824,7 +802,6 @@ def main() -> None:
         )
         print(f"  [Судья] {reason}")
 
-    # Итоговая сводка по всему прогону (Candidate и сравнение с Baseline)
     n = max(len(results), 1)
     avg_match = sum(r["cand_match"] for r in results) / n
     avg_base_match = sum(r["base_match"] for r in results) / n
@@ -935,4 +912,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()    
+    main()
