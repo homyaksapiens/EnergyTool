@@ -31,11 +31,11 @@ USE_DIALOG_SUMMARY = os.getenv("ET_USE_SUMMARY", "1").strip() != "0"
 SUMMARY_MAX_TOKENS = 160
 SUMMARY_TIMEOUT = 15.0
 SUMMARY_SYSTEM_PROMPT = (
-    "Ты — модуль сжатия контекста диалога. Сделай краткую фактическую выжимку диалога клиента с консультантом "
-    "в 1–2 предложениях (до 35 слов): кто клиент, какой у него объект, какая исходная задача и какие конкретные "
-    "параметры, цифры, сроки или условия он уже сообщил (объединяя вопросы консультанта с короткими ответами "
-    "клиента). Сохрани все числа и технические термины дословно. Не отвечай на вопрос клиента и ничего не "
-    "додумывай от себя. Пиши сразу выжимку без рассуждений. /no_think"
+    "Ты — модуль формирования поискового запроса по истории диалога. Перепиши диалог в один самодостаточный "
+    "запрос от первого лица (1–2 предложения, до 35 слов), объединив исходную тему, ВСЕ названные в диалоге "
+    "параметры объекта, количественные показатели, сроки, категории, способы работы, высказанные ограничения "
+    "и последний вопрос. НЕ используй слова «Клиент», «Консультант», «Пользователь», «начать разговор». "
+    "Сохрани все цифры и термины дословно. Не отвечай на вопрос. Пиши сразу готовый запрос без рассуждений. /no_think"
 )
 
 _SUMMARY_CACHE: dict[tuple[tuple[str, str], ...], str] = {}
@@ -43,8 +43,8 @@ _SUMMARY_LOCK = threading.Lock()
 _SUMMARY_FAILURES = 0
 _MAX_SUMMARY_FAILURES = 3
 
-# Безопасный лимит токенов для основного ответа (защита от обрыва <think> при MAX_TOKENS=1024 в settings.py)
-ANSWER_MAX_TOKENS = max(MAX_TOKENS, 1536)
+# Увеличенный лимит токенов для основного ответа: позволяет модели глубоко рассуждать в <think> без обрыва
+ANSWER_MAX_TOKENS = max(MAX_TOKENS, 2048)
 
 
 def parse_dialog(text: str) -> list[dict]:
@@ -78,7 +78,7 @@ def clean_answer(text: str) -> str:
     text = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", text, flags=re.M)
     text = " ".join(text.split())
     return re.sub(
-        r"^(?:Консультант|Ассистент|Выжимка|Резюме|Контекст|Ответ(?: консультанта)?)\s*:\s*",
+        r"^(?:Консультант|Ассистент|Выжимка|Резюме|Запрос|Контекст|Ответ(?: консультанта)?)\s*:\s*",
         "",
         text,
         flags=re.I,
@@ -136,7 +136,7 @@ def _fast_summary_call(messages: list[dict]) -> str:
 
 def summarize_dialog(messages: list[dict]) -> str:
     """Для простых одиночных вопросов возвращает сам вопрос; для многоходовых диалогов вызывает
-    быструю суммаризацию (Qwen с /no_think и малым лимитом токенов) с кэшированием и фоллбэком.
+    быструю конденсацию запроса (Qwen с /no_think и малым лимитом токенов) с кэшированием и фоллбэком.
     """
     global _SUMMARY_FAILURES
     if len(messages) <= 1:
@@ -157,13 +157,14 @@ def summarize_dialog(messages: list[dict]) -> str:
         return fallback
 
     history_lines = [
-        f"{'Клиент' if m['role'] == 'user' else 'Консультант'}: {m['content'].strip()}"
+        f"{'Пользователь' if m['role'] == 'user' else 'Ассистент'}: {m['content'].strip()}"
         for m in messages
         if m.get("content", "").strip()
     ]
     user_prompt = (
         "Диалог:\n" + "\n".join(history_lines) + "\n\n"
-        "Сделай краткую выжимку всех фактов о клиенте, его объекте и текущем вопросе в 1–2 предложениях. /no_think"
+        "Перепиши этот диалог в один самодостаточный вопрос от первого лица со всеми фактами, цифрами и деталями "
+        "из всех реплик. /no_think"
     )
     summary_msgs = [
         {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
@@ -196,9 +197,8 @@ def search_queries(messages: list[dict]) -> list[str]:
     - Диалог:
       1) global_problem (1-я реплика клиента с исходной темой)
       2) last_exchange (последний вопрос бота + ответ клиента)
-      3) full (весь диалог)
-      4) rerank_target (queries[-1]) — сжатая выжимка диалога + последний вопрос клиента
-         (используется и в поиске, и как сфокусированный запрос queries[-1] для реранкера).
+      3) user_only (все реплики самого клиента без реплик бота)
+      4) rerank_target (queries[-1]) — сфокусированный запрос для реранкера (исходная тема + выжимка + последний вопрос).
     """
     if not messages:
         return [""]
@@ -215,6 +215,7 @@ def search_queries(messages: list[dict]) -> list[str]:
         return [last]
 
     global_problem = users[0]
+    user_only = " ".join(users)
 
     prev_assistant = ""
     for m in reversed(messages[:-1]):
@@ -224,10 +225,10 @@ def search_queries(messages: list[dict]) -> list[str]:
     last_exchange = f"{prev_assistant} {last}".strip() if prev_assistant else last
 
     summary = summarize_dialog(messages)
-    rerank_target = f"{summary} {last}".strip() if last not in summary else summary
+    rerank_target = f"{summary} {last}".strip() if last.lower() not in summary.lower() else summary
 
     queries: list[str] = []
-    for q in (global_problem, last_exchange, full, rerank_target):
+    for q in (global_problem, last_exchange, user_only, rerank_target):
         if q and q not in queries:
             queries.append(q)
 
@@ -238,40 +239,36 @@ def search_queries(messages: list[dict]) -> list[str]:
     return queries or [last]
 
 
-def format_dialog_sandwich(messages: list[dict]) -> list[dict]:
-    """Техника «сэндвича» для многоходовых диалогов:
-    фиксирует глобальную задачу клиента, сводку уже известных фактов (включая выжимку суммаризатора)
-    и напоминает правила SYSTEM_PROMPT в конце.
-    Для одиночных вопросов возвращает messages без изменений.
+def _diversify_reranked(candidates: list[Chunk], order: list[int], k: int, is_dialog: bool = False) -> list[Chunk]:
+    """Защищает Top-k от забивания одноимёнными секциями («Сколько это стоит»)
+    и общими вводными секциями («С чего начинается разговор») в многоходовых диалогах.
     """
-    if len(messages) <= 1:
-        return messages
+    selected: list[Chunk] = []
+    deferred: list[Chunk] = []
+    leaf_counts: dict[str, int] = {}
 
-    users = [m["content"].strip() for m in messages if m["role"] == "user" and m["content"].strip()]
-    global_goal = users[0] if users else messages[0]["content"].strip()
-    raw_facts = " ".join(users)
-    summary = summarize_dialog(messages)
-    known_facts = f"{summary} ({raw_facts})" if summary and summary != raw_facts else raw_facts
-    last_reply = messages[-1]["content"].strip()
+    for idx in order:
+        if 0 <= idx < len(candidates):
+            c = candidates[idx]
+            leaf = c.title.rsplit("→", 1)[-1].strip().lower()
+            # В многоходовом диалоге разговор уже идёт, поэтому общие секции «с чего начинается разговор» откладываем
+            if is_dialog and leaf in {"с чего начинается разговор", "с чего начать"}:
+                deferred.append(c)
+                continue
+            max_same_leaf = 1 if leaf in {"сколько это стоит", "следующий шаг", "сроки реализации"} else 2
+            if leaf_counts.get(leaf, 0) < max_same_leaf:
+                selected.append(c)
+                leaf_counts[leaf] = leaf_counts.get(leaf, 0) + 1
+                if len(selected) >= k:
+                    return selected
+            else:
+                deferred.append(c)
 
-    history_lines = [
-        f"{'Клиент' if m['role'] == 'user' else 'Консультант'}: {m['content'].strip()}"
-        for m in messages[:-1]
-    ]
-    history_block = "\n".join(history_lines)
-
-    sandwich_prompt = (
-        f"Исходная задача клиента (глобальная тема): {global_goal}\n"
-        f"Все факты, которые клиент уже сообщил о себе и объекте: {known_facts}\n\n"
-        f"Предыдущие реплики диалога:\n{history_block}\n\n"
-        f"Последняя реплика клиента (ответь на неё):\n{last_reply}\n\n"
-        f"Напоминание правил ответа: ответь на последнюю реплику клиента с учётом его исходной задачи и всех "
-        f"сообщённых им фактов строго по материалам EnergyTool. Начни с прямого ответа по сути («Да, …», «Нет, …» "
-        f"или сама суть), затем 1–2 предложения: от чего зависит результат для ситуации клиента или важная оговорка. "
-        f"Объём — 2–4 предложения, 30–70 слов, обычный связный текст без списков и markdown. В конце задай один "
-        f"уточняющий вопрос для подбора решения, но НЕ спрашивай то, что клиент уже сообщил выше."
-    )
-    return [{"role": "user", "content": sandwich_prompt}]
+    for c in deferred:
+        if len(selected) >= k:
+            break
+        selected.append(c)
+    return selected[:k]
 
 
 class Consultant:
@@ -295,10 +292,13 @@ class Consultant:
         candidates = self.kb.search(queries, query_vectors, k=CANDIDATES)
         if self.rerank_ok and len(candidates) > CONTEXT_CHUNKS:
             try:
-                order = llm_client.rerank(queries[-1][:2000], [c.render()[:2000] for c in candidates], CONTEXT_CHUNKS)
+                order = llm_client.rerank(queries[-1][:2000], [c.render()[:2000] for c in candidates], CANDIDATES)
                 if order:
                     self.rerank_failures = 0
-                    return [candidates[i] for i in order][:CONTEXT_CHUNKS], candidates, queries, True
+                    top_chunks = _diversify_reranked(
+                        candidates, order, CONTEXT_CHUNKS, is_dialog=(len(messages) > 1)
+                    )
+                    return top_chunks, candidates, queries, True
             except llm_client.ApiError as e:
                 self._rerank_failed(f"Реранкер недоступен: {e}", permanent=e.status in (400, 404, 405, 422, 501))
             except (KeyError, TypeError, ValueError) as e:
@@ -323,7 +323,17 @@ class Consultant:
         t0 = time.time()
         chunks, candidates, queries, reranked = self._retrieve_detailed(messages, query_vectors)
         t1 = time.time()
-        convo = [{"role": "system", "content": build_system(chunks)}] + format_dialog_sandwich(messages)
+
+        system_content = build_system(chunks)
+        if len(messages) > 1:
+            summary = summarize_dialog(messages)
+            system_content += (
+                f"\n\nСводка контекста текущего диалога (учти все эти детали клиента в ответе и не переспрашивай их):\n"
+                f"{summary}"
+            )
+
+        # Передаём нативный список реплик messages без искажения ролей
+        convo = [{"role": "system", "content": system_content}] + messages
         text = ""
         for attempt in range(2):
             if deadline and time.time() > deadline:
