@@ -110,7 +110,7 @@ def summarize_dialog(messages: list[dict]) -> str:
 def search_queries(messages: list[dict]) -> list[str]:
     """Формирует поисковые запросы без размытия весов токенов:
     - Одиночный вопрос: [last]
-    - Диалог: [глобальная_проблема (1-я реплика), текущий_обмен (вопрос бота + ответ клиента), саммари, весь_диалог]
+    - Диалог: [глобальная_проблема, весь_диалог, текущий_обмен, сфокусированный_запрос_для_реранкера]
     """
     users = [m["content"].strip() for m in messages if m["role"] == "user" and m["content"].strip()]
     last = users[-1] if users else ""
@@ -125,9 +125,14 @@ def search_queries(messages: list[dict]) -> list[str]:
         last_exchange = last
 
     summary = summarize_dialog(messages)
+    rerank_target = (
+        f"{summary} {last_exchange}".strip()
+        if summary
+        else f"{global_problem} {last_exchange}".strip()
+    )
 
     queries: list[str] = []
-    for q in (global_problem, last_exchange, summary, full):
+    for q in (global_problem, full, last_exchange, rerank_target):
         if q and q not in queries:
             queries.append(q)
     return queries
@@ -163,6 +168,8 @@ def format_dialog_sandwich(messages: list[dict]) -> list[dict]:
         f"Напоминание правил ответа: ответь на последнюю реплику клиента с учётом его исходной задачи и всех "
         f"сообщённых им фактов строго по материалам EnergyTool. Начни с прямого ответа по сути («Да, …», «Нет, …» "
         f"или сама суть), затем 1–2 предложения: от чего зависит результат для ситуации клиента или важная оговорка. "
+        f"Учитывай уже названные клиентом параметры объекта и перечисляй как недостающие только те данные, "
+        f"которых он ещё не сообщал. "
         f"Объём — 2–4 предложения, 30–70 слов, обычный связный текст без списков и markdown. В конце задай один "
         f"уточняющий вопрос для подбора решения, но НЕ спрашивай то, что клиент уже сообщил выше."
     )
