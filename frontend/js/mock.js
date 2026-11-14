@@ -11,10 +11,18 @@
 
 const MockServer = (() => {
   const DB_KEY = "et-mock-db-v2"; // v2: сессии помнят номер вошедшего клиента (client_phone)
-  const AUTH_KEY = "et-mock-auth"; // "1" — клиент как будто вошёл на сайт по номеру
+  const AUTH_KEY = "et-demo-account";
   const PHONE = "+7 900 000-00-01"; // номер «вошедшего» клиента в наброске
 
-  const isAuth = () => localStorage.getItem(AUTH_KEY) === "1";
+  const ACCOUNTS = [
+    { id: "user-1", role: "user", full_name: "Петров Пётр Петрович", phone: PHONE, company: "ООО «Ромашка»" },
+    { id: "user-2", role: "user", full_name: "Иванова Анна Сергеевна", phone: "+7 900 000-00-02", company: "СНТ «Пример»" },
+    { id: "admin-1", role: "admin", full_name: "Смирнова Мария Андреевна", phone: null, company: "EnergyTool" },
+    { id: "admin-2", role: "admin", full_name: "Орлов Иван Алексеевич", phone: null, company: "EnergyTool" },
+  ];
+  const account = () => ACCOUNTS.find(a => a.id === localStorage.getItem(AUTH_KEY));
+  const isAuth = () => Boolean(account());
+  const owns = s => s.account_id ? s.account_id === account()?.id : Boolean(s.client_phone && s.client_phone === account()?.phone);
 
   // Какой ответ вернёт следующий запрос к чату. Меняется панелью «Набросок» (sketch.js).
   // "auto" — выбрать по ходу диалога, остальные значения — принудительно один раз.
@@ -97,7 +105,7 @@ const MockServer = (() => {
   function createSession(db) {
     // Вошедший клиент: сессия запоминает его номер, чтобы попасть в «Ваши диалоги» (GET /api/me/sessions)
     // Гость: настоящий сервер узнаёт его браузер по cookie; в заглушке хранилище и так своё у каждого браузера — хватает пометки
-    const s = { session_id: newId(), created_at: now(), updated_at: now(), lead_id: null, client_phone: isAuth() ? PHONE : null, guest: !isAuth(), messages: [] };
+    const s = { session_id: newId(), created_at: now(), updated_at: now(), lead_id: null, account_id: account().id, client_phone: account().phone, guest: false, messages: [] };
     db.sessions.push(s);
     return s;
   }
@@ -106,7 +114,7 @@ const MockServer = (() => {
     let session;
     if (body.session_id) {
       session = db.sessions.find((s) => s.session_id === body.session_id);
-      if (!session) throw new ApiError(404, "Сессия не найдена");
+      if (!session || !owns(session)) throw new ApiError(404, "Сессия не найдена");
     } else {
       session = createSession(db);
     }
@@ -152,7 +160,11 @@ const MockServer = (() => {
 
   function createLead(db, body) {
     const session = db.sessions.find((s) => s.session_id === body.session_id);
-    if (!session) throw new ApiError(404, "Сессия не найдена");
+    if (!session || !owns(session)) throw new ApiError(404, "Сессия не найдена");
+    if (session.lead_id) {
+      const existing = db.leads.find(l => l.lead_id === session.lead_id);
+      return { lead_id: existing.lead_id, summary: existing.summary };
+    }
     if (!body.consent) throw new ApiError(422, "Нужно согласие на обработку персональных данных");
     const digits = String(body.phone || "").replace(/\D/g, "");
     if (digits.length < 10 || digits.length > 11) throw new ApiError(422, "Проверьте номер телефона: нужно 10–11 цифр");
@@ -208,8 +220,32 @@ const MockServer = (() => {
 
   async function handle(method, path, body) {
     await sleep(150); // небольшая задержка, как у сети
+    const url = new URL(path, "http://mock.local");
+    path = url.pathname;
+    if (method === "GET" && path === "/api/auth/accounts") return ACCOUNTS;
+    if (method === "GET" && path === "/api/me") return account() ? { authenticated: true, ...account() } : { authenticated: false, phone: null };
+    if (method === "POST" && path === "/api/auth/login") {
+      const user = ACCOUNTS.find(a => a.id === body.account_id);
+      if (!user) throw new ApiError(422, "Выберите тестовый аккаунт");
+      localStorage.setItem(AUTH_KEY, user.id);
+      return { authenticated: true, ...user };
+    }
+    if (method === "POST" && path === "/api/auth/logout") { localStorage.removeItem(AUTH_KEY); return { ok: true }; }
+    if (!isAuth()) throw new ApiError(401, "Войдите в аккаунт");
+    const manager = path.startsWith("/api/manager/") || path === "/api/sessions" && method === "GET" || path.startsWith("/api/leads") && method !== "POST";
+    if (manager && account().role !== "admin") throw new ApiError(403, "Доступ только для администратора");
+    if (account().role === "admin" && (method === "POST" || path === "/api/me/sessions")) throw new ApiError(403, "Выберите аккаунт пользователя");
     const db = load();
     let m;
+
+    if (method === "GET" && (m = path.match(/^\/api\/manager\/leads\/(\d+)$/))) {
+      const lead = db.leads.find(l => l.lead_id === Number(m[1]));
+      if (!lead) throw new ApiError(404, "Заявка не найдена");
+      return { ...lead };
+    }
+    if (method === "GET" && (path === "/api/manager/leads" || path === "/api/manager/sessions")) {
+      return managerPage(db, path.endsWith("/leads"), url.searchParams);
+    }
 
     if (method === "POST" && path === "/api/sessions") {
       const s = createSession(db);
@@ -219,12 +255,12 @@ const MockServer = (() => {
     if (method === "GET" && path === "/api/sessions") return listSessions(db);
     if (method === "GET" && path === "/api/me/sessions") {
       // Вошедший клиент — диалоги по номеру и начатые в этом браузере; гость — только начатые в этом браузере
-      return listSessions(db, (s) => s.guest || (isAuth() && s.client_phone === PHONE));
+      return listSessions(db, owns);
     }
     if (method === "GET" && (m = path.match(/^\/api\/sessions\/(\w+)$/))) {
       const s = db.sessions.find((x) => x.session_id === m[1]);
-      if (!s) throw new ApiError(404, "Сессия не найдена");
-      const { client_phone, guest, ...pub } = s; // номер клиента и пометку гостя наружу не отдаём
+      if (!s || (account().role !== "admin" && !owns(s))) throw new ApiError(404, "Сессия не найдена");
+      const { client_phone, guest, account_id, ...pub } = s; // служебные поля наружу не отдаём
       return pub;
     }
     if (method === "POST" && path === "/api/chat") return chat(db, body);
@@ -239,16 +275,51 @@ const MockServer = (() => {
       save(db);
       return { ok: true };
     }
-    if (method === "GET" && path === "/api/me") {
-      // Вход на сайт изображается галочкой в панели «Набросок»
-      return isAuth() ? { authenticated: true, phone: PHONE } : { authenticated: false, phone: null };
-    }
     if (method === "GET" && path === "/api/health") return { ok: true, model: "заглушка", kb_chunks: 236, dense: false };
     throw new ApiError(404, `Нет такого пути в заглушке: ${method} ${path}`);
   }
 
   function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
+  }
+
+  // Те же выборки, что у API; только для автономной работы над интерфейсом.
+  function managerPage(db, leads, p) {
+    const q = (p.get("q") || "").trim().toLocaleLowerCase("ru");
+    const digits = q.replace(/\D/g, "");
+    const days = Number(p.get("days") || 0), limit = Number(p.get("limit") || 50), offset = Number(p.get("offset") || 0);
+    let items = leads ? db.leads.map(l => ({ ...l })) : listSessions(db);
+    items = items.filter(item => {
+      const session = db.sessions.find(s => s.session_id === item.session_id);
+      const lead = db.leads.find(l => l.session_id === item.session_id);
+      const text = [lead?.lead_id, lead?.full_name, lead?.company, lead?.phone, lead?.summary, ...session.messages.map(m => m.text), leads ? "" : item.session_id].join(" ").toLocaleLowerCase("ru");
+      const phoneMatch = digits.length >= 4 && /^[+\d\s()\-]+$/.test(q) && lead?.phone.replace(/\D/g, "").includes(digits);
+      return (!q || text.includes(q) || phoneMatch) && (!days || Date.parse(leads ? item.created_at : item.updated_at) >= Date.now() - days * 86400000);
+    });
+    const counts = { all: items.length, active: 0, new: 0, in_progress: 0, done: 0, rejected: 0 };
+    if (leads) {
+      items.forEach(l => counts[l.status]++);
+      counts.active = counts.new + counts.in_progress;
+      const status = p.get("status") || "all";
+      items = items.filter(l => status === "all" || status === "active" && ["new", "in_progress"].includes(l.status) || l.status === status);
+    } else {
+      const has = p.get("has_lead") || "all";
+      items = items.filter(s => has === "all" || (has === "yes") === Boolean(s.lead_id));
+    }
+    const total = items.length, sort = p.get("sort");
+    items.sort((a, b) => {
+      const stamp = item => !leads || sort === "activity" ? db.sessions.find(s => s.session_id === item.session_id).updated_at : item.created_at;
+      const order = stamp(b).localeCompare(stamp(a)) || (leads ? b.lead_id - a.lead_id : b.session_id.localeCompare(a.session_id));
+      return sort === "oldest" ? -order : order;
+    });
+    items = items.slice(offset, offset + limit).map(item => {
+      const lead = db.leads.find(l => l.session_id === item.session_id);
+      if (!leads) return { ...item, full_name: lead?.full_name, company: lead?.company };
+      const task = item.summary.match(/(?:\*\*)?Задача:(?:\*\*)?\s*([^\n]+)/i)?.[1];
+      const { summary, phone, ...brief } = item;
+      return { ...brief, task: task?.replace(/\*\*/g, "").slice(0, 200) || "Задача не указана" };
+    });
+    return { items, total, limit, offset, ...(leads ? { counts } : {}) };
   }
 
   // ---------- Стартовые данные: выдуманные диалоги ----------
@@ -290,7 +361,7 @@ const MockServer = (() => {
           ],
         },
         {
-          session_id: s4, created_at: now(-30), updated_at: now(-29), lead_id: null, client_phone: null,
+          session_id: s4, created_at: now(-30), updated_at: now(-29), lead_id: null, client_phone: "+7 900 000-00-02",
           messages: [
             msg("user", "В СНТ большие потери, как найти, где теряется электроэнергия?", -30),
             msg("assistant", REPLIES.clarify.answer, -30, dbg(3700, REPLIES.clarify.sources)),

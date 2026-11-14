@@ -17,7 +17,7 @@
   --control: #868f98;        /* рамки полей и выключенный переключатель: 3,3 на белом */
 
   /* Роли. Все стили берут цвета отсюда — варианты внешнего вида меняют в основном этот блок */
-  --bg: var(--white);                /* фон страницы и ленты чата — белый: блоки выделяет только тень */
+  --bg: #f5f5f5;                     /* светло-серый фон страницы и ленты чата */
   --card: var(--white);              /* блоки, карточки, пузыри бота */
   --accent: var(--red);              /* главные кнопки и значки */
   --accent-hover: color-mix(in srgb, var(--red) 86%, #000);  /* тот же красный темнее — наведение */
@@ -50,7 +50,7 @@
   /* Движение: быстрый старт и мягкая остановка */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
-  --font: Arial, "Helvetica Neue", Helvetica, sans-serif; /* решение команды от 10.11: Arial вместо Manrope */
+  --font: Arial, sans-serif; /* обязательный шрифт интерфейса; менять только по прямой просьбе пользователя */
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -58,7 +58,7 @@
 /* Атрибут hidden прячет элемент всегда, даже если у класса задан display: flex и т. п. */
 [hidden] { display: none !important; }
 
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; font-family: var(--font); }
 
 body {
   margin: 0;
@@ -72,7 +72,7 @@ body {
 
 h1, h2, h3 { margin: 0; line-height: 1.15; text-wrap: balance; letter-spacing: -0.02em; }
 p { margin: 0; }
-button, input, textarea, select { font: inherit; color: inherit; }
+button, input, textarea, select { font: inherit; font-family: var(--font); color: inherit; }
 a { color: var(--link); text-underline-offset: 3px; }
 
 /* Выделение текста и рамка фокуса — в цветах сайта, а не браузера */

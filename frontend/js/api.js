@@ -50,6 +50,9 @@ const Api = (() => {
 
   return {
     isMock: USE_MOCK,
+    accounts: () => request("GET", "/api/auth/accounts"),
+    login: (accountId) => request("POST", "/api/auth/login", { account_id: accountId }),
+    logout: () => request("POST", "/api/auth/logout"),
     newSession: () => request("POST", "/api/sessions"),
     me: () => request("GET", "/api/me"), // вошёл ли клиент на сайт и его номер
     // clientMessageId — метка реплики: при «Повторить» уходит та же, чтобы сервер не записал вопрос дважды
@@ -62,5 +65,8 @@ const Api = (() => {
     createLead: (lead) => request("POST", "/api/leads", lead, 90000), // резюме для менеджера пишет бот — тоже может быть долго
     listLeads: () => request("GET", "/api/leads"),
     setLeadStatus: (id, status) => request("PATCH", `/api/leads/${id}`, { status }),
+    managerLeads: (params) => request("GET", `/api/manager/leads?${new URLSearchParams(params)}`),
+    managerSessions: (params) => request("GET", `/api/manager/sessions?${new URLSearchParams(params)}`),
+    managerLead: (id) => request("GET", `/api/manager/leads/${encodeURIComponent(id)}`),
   };
 })();

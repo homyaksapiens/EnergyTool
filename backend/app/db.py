@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS leads (
     summary    TEXT NOT NULL,
     status     TEXT NOT NULL DEFAULT 'new'
 );
+CREATE INDEX IF NOT EXISTS leads_by_status ON leads(status, id);
+CREATE INDEX IF NOT EXISTS sessions_by_updated ON sessions(updated_at, id);
 """
 
 
@@ -71,16 +73,19 @@ def init() -> None:
         if "visitor_id" not in {row["name"] for row in c.execute("PRAGMA table_info(sessions)")}:
             c.execute("ALTER TABLE sessions ADD COLUMN visitor_id TEXT")
         c.execute("CREATE INDEX IF NOT EXISTS sessions_by_visitor ON sessions(visitor_id)")
+        if "account_id" not in {row["name"] for row in c.execute("PRAGMA table_info(sessions)")}:
+            c.execute("ALTER TABLE sessions ADD COLUMN account_id TEXT")
+        c.execute("CREATE INDEX IF NOT EXISTS sessions_by_account ON sessions(account_id)")
 
 
 # ---------- сессии ----------
 
-def create_session(client_phone: str | None = None, visitor_id: str | None = None) -> str:
+def create_session(client_phone: str | None = None, visitor_id: str | None = None, account_id: str | None = None) -> str:
     session_id = uuid.uuid4().hex
     t = now()
     with connect() as c:
-        c.execute("INSERT INTO sessions (id, created_at, updated_at, client_phone, visitor_id) VALUES (?,?,?,?,?)",
-                  (session_id, t, t, client_phone or None, visitor_id or None))
+        c.execute("INSERT INTO sessions (id, created_at, updated_at, client_phone, visitor_id, account_id) VALUES (?,?,?,?,?,?)",
+                  (session_id, t, t, client_phone or None, visitor_id or None, account_id))
     return session_id
 
 
@@ -121,11 +126,13 @@ def list_sessions() -> list[dict]:
     return _list_sessions("", ())
 
 
-def list_client_sessions(client_phone: str | None, visitor_id: str | None) -> list[dict]:
+def list_client_sessions(client_phone: str | None, visitor_id: str | None, account_id: str | None = None) -> list[dict]:
     """Диалоги одного клиента: по номеру вошедшего и по метке его браузера. Нет ни того, ни другого — пусто.
 
     Отдельная функция, а не параметры list_sessions: пустой фильтр не должен случайно отдать чужие диалоги.
     """
+    if account_id:
+        return _list_sessions("WHERE s.account_id = ?", (account_id,))
     conditions, params = [], []
     if client_phone:
         conditions.append("s.client_phone = ?")

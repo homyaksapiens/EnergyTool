@@ -22,7 +22,7 @@ ROOT = Path(TMP.name)
 (ROOT / "frontend" / "js" / "mock.js").write_text("const MockServer = {};", encoding="utf-8")
 os.environ.update({
     "KB_PATH": str(ROOT / "kb"), "DB_PATH": str(ROOT / "test.db"), "FRONTEND_DIR": str(ROOT / "frontend"),
-    "LLM_BASE_URL": "", "OPENAI_BASE_URL": "", "ET_USE_DENSE": "0",
+    "LLM_BASE_URL": "", "OPENAI_BASE_URL": "", "ET_USE_DENSE": "0", "DEMO_AUTH": "0",
     "MANAGER_PASSWORD": "", "DEMO_CLIENT_PHONE": "", "TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": "",
 })
 
@@ -350,6 +350,128 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(left, 0)
 
     # ---------- фронтенд ----------
+
+    def test_demo_auth_roles_switching_and_ownership(self):
+        with mock.patch.object(config, "DEMO_AUTH", True):
+            browser = TestClient(main.app)
+            self.assertEqual(len(browser.get("/api/auth/accounts").json()), 4)
+            self.assertEqual(browser.post("/api/chat", json={"message": "Вопрос"}).status_code, 401)
+            self.assertEqual(browser.get("/api/leads").status_code, 401)
+            self.assertEqual(browser.post("/api/auth/login", json={"account_id": "unknown"}).status_code, 422)
+            login = browser.post("/api/auth/login", json={"account_id": "user-1"})
+            self.assertIn("HttpOnly", login.headers["set-cookie"])
+            self.assertEqual(browser.get("/api/me").json()["id"], "user-1")
+            first_token = browser.cookies.get("et_account")
+            first = browser.post("/api/chat", json={"message": "Первый клиент"}).json()["session_id"]
+            self.assertEqual(browser.get("/api/leads").status_code, 403)
+            browser.post("/api/auth/login", json={"account_id": "user-2"})
+            self.assertEqual(browser.get("/api/me/sessions").json(), [])
+            self.assertEqual(browser.get(f"/api/sessions/{first}").status_code, 404)
+            self.assertEqual(browser.post("/api/chat", json={"session_id": first, "message": "Чужой вопрос"}).status_code, 404)
+            self.assertEqual(browser.post("/api/leads", json={**LEAD, "session_id": first}).status_code, 404)
+            second = browser.post("/api/chat", json={"message": "Второй клиент"}).json()["session_id"]
+            browser.post("/api/auth/login", json={"account_id": "user-1"})
+            self.assertEqual([s["session_id"] for s in browser.get("/api/me/sessions").json()], [first])
+            # Старый токен после переключения не действует.
+            old_browser = TestClient(main.app, cookies={"et_account": first_token})
+            self.assertFalse(old_browser.get("/api/me").json()["authenticated"])
+            for admin in ("admin-1", "admin-2"):
+                browser.post("/api/auth/login", json={"account_id": admin})
+                self.assertEqual(browser.get("/api/me").json()["role"], "admin")
+                self.assertEqual(browser.get("/api/leads").status_code, 200)
+                self.assertEqual(browser.get("/manager.html").status_code, 200)
+                for sid in (first, second):
+                    self.assertEqual(browser.get(f"/api/sessions/{sid}").status_code, 200)
+            token = browser.cookies.get("et_account")
+            browser.post("/api/auth/logout")
+            self.assertFalse(browser.get("/api/me").json()["authenticated"])
+            self.assertEqual(browser.get("/api/sessions").status_code, 401)
+            expired = TestClient(main.app, cookies={"et_account": token})
+            self.assertFalse(expired.get("/api/me").json()["authenticated"])
+
+    def test_demo_auth_rejects_cross_origin_login(self):
+        with mock.patch.object(config, "DEMO_AUTH", True):
+            client = TestClient(main.app)
+            self.assertEqual(client.post("/api/auth/login", json={"account_id": "admin-1"},
+                                         headers={"Origin": "https://other.example"}).status_code, 403)
+
+    def test_manager_pages_search_and_filters(self):
+        marker = "ТаблицаЁж"
+        ids = []
+        for index, status in enumerate(db.LEAD_STATUSES):
+            sid = db.create_session()
+            db.add_message(sid, "user", f"{marker} сообщение {index} про солнечную станцию")
+            lead_id = db.create_lead(sid, "Тестов Тест Тестович", "+7 (900) 123-45-67", marker, "**Задача:** Учёт энергии\n**Что выяснили:** объект")
+            db.set_lead_status(lead_id, status)
+            ids.append(lead_id)
+        first = self.client.get("/api/manager/leads", params={"q": marker.lower(), "limit": 2}).json()
+        second = self.client.get("/api/manager/leads", params={"q": marker, "limit": 2, "offset": 2}).json()
+        self.assertEqual(first["total"], 4)
+        self.assertEqual(first["counts"]["active"], 2)
+        self.assertEqual([x["lead_id"] for x in first["items"] + second["items"]], ids[::-1])
+        self.assertNotIn("summary", first["items"][0])
+        self.assertNotIn("phone", first["items"][0])
+        self.assertEqual(first["items"][0]["task"], "Учёт энергии")
+        active = self.client.get("/api/manager/leads", params={"q": marker, "status": "active"}).json()
+        self.assertEqual(active["total"], 2)
+        self.assertEqual(active["counts"]["all"], 4)
+        oldest = self.client.get("/api/manager/leads", params={"q": marker, "sort": "oldest"}).json()
+        self.assertEqual([x["lead_id"] for x in oldest["items"]], ids)
+        for q in ("9001234567", "СОЛНЕЧНУЮ СТАНЦИЮ", "учёт энергии"):
+            result = self.client.get("/api/manager/leads", params={"q": q}).json()
+            self.assertTrue(set(ids).issubset({x["lead_id"] for x in result["items"]}))
+        self.assertEqual(self.client.get("/api/manager/leads", params={"q": "%_несуществующий"}).json()["total"], 0)
+        detail = self.client.get(f"/api/manager/leads/{ids[0]}").json()
+        self.assertEqual(detail["phone"], "+7 (900) 123-45-67")
+        self.assertIn("summary", detail)
+        self.assertEqual(self.client.get("/api/manager/leads/99999999").status_code, 404)
+
+    def test_manager_limits_large_queue(self):
+        marker = "БольшаяТестоваяОчередь"
+        for index in range(121):
+            sid = db.create_session()
+            db.add_message(sid, "user", marker)
+            db.create_lead(sid, "Тестов Тест Тестович", "+7 900 000-00-00", marker, "**Задача:** Проверка страниц")
+        first = self.client.get("/api/manager/leads", params={"q": marker, "limit": 100}).json()
+        last = self.client.get("/api/manager/leads", params={"q": marker, "limit": 100, "offset": 100}).json()
+        self.assertEqual(first["total"], 121)
+        self.assertEqual(len(first["items"]), 100)
+        self.assertEqual(len(last["items"]), 21)
+        self.assertEqual(len({item["lead_id"] for item in first["items"] + last["items"]}), 121)
+
+    def test_manager_sessions_pages_and_period(self):
+        marker = "ПорцииБезЗаявки"
+        sid = db.create_session()
+        db.add_message(sid, "user", marker)
+        empty = db.create_session()
+        page = self.client.get("/api/manager/sessions", params={"q": marker.lower(), "has_lead": "no", "limit": 1}).json()
+        self.assertEqual(page["total"], 1)
+        self.assertEqual(page["items"][0]["session_id"], sid)
+        self.assertEqual(self.client.get("/api/manager/sessions", params={"q": empty}).json()["total"], 0)
+        self.assertEqual(self.client.get("/api/manager/sessions", params={"q": marker, "has_lead": "yes"}).json()["total"], 0)
+        with db.connect() as c:
+            c.execute("UPDATE sessions SET updated_at = '2020-01-01T00:00:00.000+00:00' WHERE id = ?", (sid,))
+        self.assertEqual(self.client.get("/api/manager/sessions", params={"q": marker, "days": 7}).json()["total"], 0)
+        self.assertEqual(self.client.get("/api/manager/sessions", params={"q": marker, "days": 0}).json()["total"], 1)
+        with db.connect() as c:
+            c.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (db.now(), sid))
+
+    def test_manager_pages_validate_and_enforce_roles(self):
+        paths = ("/api/manager/leads", "/api/manager/sessions", "/api/manager/leads/1")
+        with mock.patch.object(config, "DEMO_AUTH", True):
+            with TestClient(main.app) as client:
+                for path in paths:
+                    self.assertEqual(client.get(path).status_code, 401)
+                client.post("/api/auth/login", json={"account_id": "user-1"})
+                for path in paths:
+                    self.assertEqual(client.get(path).status_code, 403)
+                client.post("/api/auth/login", json={"account_id": "admin-1"})
+                self.assertEqual(client.get(paths[0]).status_code, 200)
+        for params in ({"limit": 101}, {"offset": -1}, {"status": "bad"}, {"sort": "id;DROP"}, {"q": "я" * 201}, {"days": 1}):
+            self.assertEqual(self.client.get("/api/manager/leads", params=params).status_code, 422)
+        with mock.patch.object(config, "MANAGER_PASSWORD", "test-password"):
+            for path in paths:
+                self.assertEqual(self.client.get(path).status_code, 401)
 
     def test_frontend_is_served_without_mock(self):
         self.assertIn("сайт", self.client.get("/").text)

@@ -4,9 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Панель менеджера — EnergyTool</title>
-  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/base.css?v=arial1">
   <link rel="stylesheet" href="css/chat.css">   <!-- пузыри сообщений и блок отладки — те же, что в чате -->
-  <link rel="stylesheet" href="css/manager.css">
+  <link rel="stylesheet" href="css/manager.css?v=manager2">
+  <link rel="stylesheet" href="css/auth.css">
 </head>
 <body class="manager">
 
@@ -16,29 +17,52 @@
       <span><strong>EnergyTool</strong><small>Панель менеджера</small></span>
     </a>
     <!-- Вкладки: заявки и история всех диалогов (в том числе без заявки) -->
-    <nav class="tabs" role="tablist" aria-label="Разделы панели">
-      <button role="tab" id="tab-leads" aria-selected="true" data-tab="leads">Заявки <span class="tabs__count" id="count-leads"></span></button>
-      <button role="tab" id="tab-sessions" aria-selected="false" data-tab="sessions">Все диалоги <span class="tabs__count" id="count-sessions"></span></button>
+    <nav class="tabs" aria-label="Разделы панели">
+      <button id="tab-leads" aria-pressed="true" data-tab="leads">Заявки <span class="tabs__count" id="count-leads"></span></button>
+      <button id="tab-sessions" aria-pressed="false" data-tab="sessions">Все диалоги <span class="tabs__count" id="count-sessions"></span></button>
     </nav>
     <button class="btn btn-ghost" type="button" id="refresh-btn" aria-label="Обновить"><span data-icon="retry"></span><span class="hide-narrow">Обновить</span></button>
   </header>
 
   <main class="mgr-layout" id="layout">
-    <!-- Слева список, справа карточка выбранной заявки или диалога -->
-    <section class="mgr-list" aria-label="Список">
-      <div class="filters" id="filters" role="group" aria-label="Фильтр по статусу"></div>
-      <ul class="items" id="items"></ul>
-    </section>
-    <section class="mgr-detail" id="detail" aria-live="polite">
-      <div class="empty">
-        <p>Выберите заявку или диалог слева.</p>
+    <nav class="mgr-sidebar" aria-label="Очереди заявок" id="sidebar">
+      <h1 id="section-title">Заявки</h1>
+      <div class="queues" id="filters" role="group" aria-label="Фильтр по статусу"></div>
+    </nav>
+    <section class="mgr-workspace" id="workspace" aria-labelledby="table-title">
+      <div class="workspace-head">
+        <div><h2 id="table-title">Все заявки</h2><p id="result-count" class="muted" role="status" aria-live="polite"></p></div>
+        <button class="btn btn-ghost" type="button" id="reset-btn" hidden>Сбросить фильтры</button>
       </div>
+      <form class="mgr-toolbar" id="search-form" role="search">
+        <label class="search-field"><span class="sr-only">Поиск по номеру, клиенту, компании, телефону или переписке</span>
+          <input type="search" id="search" placeholder="Поиск по клиенту, компании, переписке…" maxlength="200" autocomplete="off">
+        </label>
+        <button class="btn btn-secondary" type="submit">Найти</button>
+        <label class="field"><span>Период</span><select id="period"><option value="0">Всё время</option><option value="7">7 дней</option><option value="30">30 дней</option></select></label>
+        <label class="field"><span>Порядок</span><select id="sort"><option value="newest">Сначала новые</option><option value="oldest">Сначала старые</option><option value="activity">По активности</option></select></label>
+        <label class="field" id="lead-filter-field" hidden><span>Заявка</span><select id="has-lead"><option value="all">Все диалоги</option><option value="yes">С заявкой</option><option value="no">Без заявки</option></select></label>
+      </form>
+      <div class="table-scroll" id="table-scroll" tabindex="0" role="region" aria-label="Таблица заявок, прокрутка по горизонтали">
+        <table class="mgr-table"><caption class="sr-only" id="table-caption">Заявки клиентов</caption><thead id="table-head"></thead><tbody id="items"></tbody></table>
+      </div>
+      <footer class="pagination">
+        <label class="page-size">На странице <select id="page-size" aria-label="Записей на странице"><option>25</option><option selected>50</option><option>100</option></select></label>
+        <span id="page-range" role="status"></span>
+        <button type="button" class="btn btn-ghost" id="prev-page" disabled>Назад</button>
+        <button type="button" class="btn btn-ghost" id="next-page" disabled>Далее</button>
+      </footer>
     </section>
+    <aside class="mgr-detail" id="detail" aria-labelledby="detail-title" hidden>
+      <div class="detail-toolbar"><span id="detail-label">Карточка заявки</span><button type="button" class="btn btn-ghost" id="close-detail">Закрыть <span data-icon="close"></span></button></div>
+      <div class="detail-content" id="detail-content"></div>
+    </aside>
   </main>
 
-  <script src="js/mock.js"></script>
-  <script src="js/api.js"></script>
+  <script src="js/mock.js?v=manager2"></script>
+  <script src="js/api.js?v=manager2"></script>
   <script src="js/ui.js"></script>
-  <script src="js/manager.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/manager.js?v=manager2"></script>
 </body>
 </html>

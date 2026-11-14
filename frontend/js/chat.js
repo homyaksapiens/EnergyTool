@@ -90,6 +90,10 @@ const Chat = (() => {
 
   // intent: "lead" — пришли с кнопки «Оставить заявку»; ask — сразу задать этот вопрос
   async function open({ intent, ask, opener } = {}) {
+    await Auth.ready;
+    if (Auth.enabled && !Auth.user) { Auth.show(); return; }
+    if (Auth.user?.role === "admin") return;
+    if (!state.started) state.sessionId = sessionStorage.getItem(SESSION_KEY);
     state.opener = opener || document.activeElement;
 
     // Анимация: чат «вырастает» из кнопки, которой его открыли
@@ -119,9 +123,8 @@ const Chat = (() => {
   }
 
   // Пока чат открыт, сайт под ним недоступен для Tab и экранной читалки.
-  // Панель «Набросок» (.sketch) не трогаем — она нужна поверх чата
   function setPageInert(on) {
-    document.querySelectorAll("body > :not(#chat):not(.sketch):not(script)").forEach((node) => {
+    document.querySelectorAll("body > :not(#chat):not(.auth-dialog):not(script)").forEach((node) => {
       node.inert = on;
     });
   }
@@ -503,25 +506,28 @@ const Chat = (() => {
     form.setAttribute("aria-labelledby", "lead-title");
     form.innerHTML = `
       <h3 id="lead-title">Заявка менеджеру</h3>
-      <p class="lead-card__hint">Менеджер позвонит и продолжит с того места, где мы остановились: резюме разговора придёт ему вместе с заявкой.</p>
+      <p class="lead-card__hint">Передадим менеджеру контакты и резюме диалога.</p>
       ${field("full_name", "ФИО", "text", "name", "Иванов Иван Иванович")}
       ${state.profile ? phoneFromProfile(state.profile.phone) : field("phone", "Телефон", "tel", "tel", "+7 900 000-00-00")}
       ${field("company", "Компания", "text", "organization", "ООО «Пример»")}
       <div class="check-wrap">
         <label class="check">
           <input type="checkbox" name="consent" aria-describedby="lead-consent-error">
-          <span>Согласен, чтобы ФИО, телефон и название компании передали менеджеру для связи по этой заявке.
-            <a href="privacy.html" target="_blank" rel="noopener">Как мы храним данные</a></span>
+          <span>Согласен передать контакты менеджеру.
+            <a href="privacy.html" target="_blank" rel="noopener">Обработка данных</a></span>
         </label>
         <p class="field__error" id="lead-consent-error" hidden></p>
       </div>
       <p class="form-error" role="alert" hidden></p>
       <div class="lead-card__actions">
         <button type="submit" class="btn btn-primary">Отправить заявку</button>
-        <button type="button" class="btn btn-ghost" data-act="cancel">Продолжить без заявки</button>
+        <button type="button" class="btn btn-ghost" data-act="cancel">Вернуться в чат</button>
       </div>`;
 
     if (state.profile) setupProfilePhone(form);
+    // Если сайт передал сведения профиля, повторно вводить их не нужно.
+    form.elements.full_name.value = state.profile?.full_name || "";
+    form.elements.company.value = state.profile?.company || "";
     const phone = form.elements.phone;
     phone.addEventListener("blur", () => {
       phone.value = formatPhone(phone.value);
@@ -560,7 +566,7 @@ const Chat = (() => {
         <div class="phone-profile">
           ${UI.icon("phone")}
           <strong>${UI.esc(profilePhone)}</strong>
-          <span class="phone-profile__note">из вашего профиля</span>
+          <span class="phone-profile__note">из профиля</span>
           <button type="button" class="link-btn" data-act="phone-manual">Другой номер</button>
         </div>
         <div class="phone-manual" hidden>
@@ -713,7 +719,7 @@ const Chat = (() => {
       <div class="lead-done__icon">${UI.icon("check")}</div>
       <div>
         <h3>Заявка №${UI.esc(res.lead_id)} отправлена</h3>
-        <p>Менеджер позвонит на ${UI.esc(phone)}. А пока можно продолжить разговор здесь.</p>
+        <p>Менеджер позвонит на ${UI.esc(phone)}.</p>
         ${res.summary ? `<details><summary>Что увидит менеджер</summary>
           <div class="lead-done__summary">${UI.miniMarkdown(res.summary)}</div></details>` : ""}
       </div>`;

@@ -8,11 +8,12 @@ import re
 import secrets
 import threading
 import time
+from typing import Literal
 from contextlib import asynccontextmanager, contextmanager
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -21,7 +22,7 @@ from pydantic import BaseModel
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)  # иначе в лог попадает адрес Telegram с токеном бота
 
-from . import config, core, db, leads  # noqa: E402
+from . import auth, config, core, db, leads, manager  # noqa: E402
 from .notify import notify_manager  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ def _purge_daily() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
+    auth.init()
     db.purge_old()
     core.start()
     threading.Thread(target=_purge_daily, name="retention", daemon=True).start()
@@ -53,6 +55,36 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="EnergyTool — ИИ-консультант", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def same_origin(request: Request, call_next):
+    # Cookie-вход: изменять данные разрешаем только со своего сайта.
+    if request.method in {"POST", "PATCH", "DELETE"} and request.url.path.startswith("/api/"):
+        origin = request.headers.get("origin")
+        if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
+            return JSONResponse({"detail": "Запрос разрешён только с этого сайта"}, status_code=403)
+    return await call_next(request)
+
+
+class LoginIn(BaseModel):
+    account_id: str
+
+
+@app.get("/api/auth/accounts")
+def demo_accounts():
+    return auth.ACCOUNTS if config.DEMO_AUTH else []
+
+
+@app.post("/api/auth/login")
+def login(body: LoginIn, request: Request, response: Response):
+    return auth.login(request, response, body.account_id)
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request, response: Response):
+    auth.logout(request, response)
+    return {"ok": True}
 
 
 # ---------- ошибки: всегда {"detail": "текст для человека"} ----------
@@ -78,7 +110,8 @@ def current_phone(request: Request) -> str | None:
     DEMO_CLIENT_PHONE включает показ «Ваших диалогов». При интеграции с сайтом здесь появится
     чтение cookie или токена (CONTRACTS.md, раздел 8).
     """
-    return config.DEMO_CLIENT_PHONE or None
+    user = auth.account(request)
+    return user["phone"] if user else (None if config.DEMO_AUTH else config.DEMO_CLIENT_PHONE or None)
 
 
 # Гостя узнаём по анонимной метке браузера в cookie: по ней «Ваши диалоги» работают без входа.
@@ -109,8 +142,13 @@ def remember_visitor(request: Request, response: Response) -> str:
 basic = HTTPBasic(auto_error=False)
 
 
-def require_manager(credentials: HTTPBasicCredentials | None = Depends(basic)) -> None:
+def require_manager(request: Request, credentials: HTTPBasicCredentials | None = Depends(basic)) -> None:
     """Доступ к панели менеджера. Пароль не задан — открыто (локальная разработка и демо)."""
+    if config.DEMO_AUTH:
+        user = auth.require_account(request)
+        if user["role"] != "admin":
+            raise HTTPException(403, "Доступ только для администратора")
+        return
     if not config.MANAGER_PASSWORD:
         return
     ok = credentials is not None and secrets.compare_digest(
@@ -177,12 +215,14 @@ def model_history(stored: list[dict]) -> list[dict]:
 @app.post("/api/sessions", status_code=201)
 def new_session(request: Request, response: Response):
     """Кнопка «Новый диалог»: пустая сессия без истории. Старая остаётся в базе."""
-    return {"session_id": db.create_session(current_phone(request), remember_visitor(request, response))}
+    user = auth.require_client(request)
+    return {"session_id": db.create_session(current_phone(request), None if user else remember_visitor(request, response), user["id"] if user else None)}
 
 
 @app.post("/api/chat")
 def chat(body: ChatIn, request: Request, response: Response):
     """Реплика клиента → ответ консультанта. Обычный def: вызов модели долгий и идёт в пуле потоков."""
+    user = auth.require_client(request)
     text = body.message.strip()
     if not text:
         raise HTTPException(422, "Пустое сообщение")
@@ -192,10 +232,11 @@ def chat(body: ChatIn, request: Request, response: Response):
 
     session_id = body.session_id
     if session_id:
+        auth.check_session(request, session_id)
         if not db.session_exists(session_id):
             raise HTTPException(404, "Сессия не найдена")
     else:
-        session_id = db.create_session(current_phone(request), remember_visitor(request, response))
+        session_id = db.create_session(current_phone(request), None if user else remember_visitor(request, response), user["id"] if user else None)
 
     with session_locks.hold(session_id):
         session = db.get_session(session_id)
@@ -250,6 +291,9 @@ def all_sessions():
 
 @app.get("/api/me")
 def me(request: Request):
+    if config.DEMO_AUTH:
+        user = auth.account(request)
+        return {"authenticated": True, **user} if user else {"authenticated": False, "phone": None}
     phone = current_phone(request)
     return {"authenticated": bool(phone), "phone": phone}
 
@@ -260,12 +304,14 @@ def my_sessions(request: Request):
 
     Гость видит диалоги, начатые в этом браузере; без метки — пустой список.
     """
-    return db.list_client_sessions(current_phone(request), current_visitor(request))
+    user = auth.require_client(request)
+    return db.list_client_sessions(current_phone(request), None if user else current_visitor(request), user["id"] if user else None)
 
 
 @app.get("/api/sessions/{session_id}")
-def session_detail(session_id: str):
+def session_detail(session_id: str, request: Request):
     """Сессия целиком. Открыта по id: клиент возвращается к своему диалогу, а id нельзя подобрать."""
+    auth.check_session(request, session_id)
     session = db.get_session(session_id)
     if session is None:
         raise HTTPException(404, "Сессия не найдена")
@@ -289,8 +335,10 @@ class StatusIn(BaseModel):
 
 
 @app.post("/api/leads", status_code=201)
-def create_lead(body: LeadIn, background: BackgroundTasks):
+def create_lead(body: LeadIn, background: BackgroundTasks, request: Request):
     """Клиент оставил контакты: проверяем форму, пишем резюме диалога и сохраняем заявку."""
+    auth.require_client(request)
+    auth.check_session(request, body.session_id)
     full_name, phone, company = (" ".join(v.split()) for v in (body.full_name, body.phone, body.company))
     error = leads.validate_lead(full_name, phone, company, body.consent)
     if error:
@@ -329,6 +377,31 @@ def update_lead(lead_id: int, body: StatusIn):
     return {"ok": True}
 
 
+# ---------- таблицы панели менеджера ----------
+
+@app.get("/api/manager/leads", dependencies=[Depends(require_manager)])
+def manager_leads(q: str = Query("", max_length=200),
+                  status: Literal["all", "active", "new", "in_progress", "done", "rejected"] = "all",
+                  days: Literal["0", "7", "30"] = "0", sort: Literal["newest", "oldest", "activity"] = "newest",
+                  limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):
+    return manager.leads_page(q, status, int(days), sort, limit, offset)
+
+
+@app.get("/api/manager/sessions", dependencies=[Depends(require_manager)])
+def manager_sessions(q: str = Query("", max_length=200), has_lead: Literal["all", "yes", "no"] = "all",
+                     days: Literal["0", "7", "30"] = "0", sort: Literal["newest", "oldest"] = "newest",
+                     limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):
+    return manager.sessions_page(q, has_lead, int(days), sort, limit, offset)
+
+
+@app.get("/api/manager/leads/{lead_id}", dependencies=[Depends(require_manager)])
+def manager_lead_detail(lead_id: int):
+    lead = manager.lead_detail(lead_id)
+    if lead is None:
+        raise HTTPException(404, "Заявка не найдена")
+    return lead
+
+
 # ---------- служебное ----------
 
 @app.get("/api/health")
@@ -348,9 +421,15 @@ def no_mock():
                     media_type="application/javascript", headers={"Cache-Control": "no-store"})
 
 
-@app.get("/manager", include_in_schema=False, dependencies=[Depends(require_manager)])
-@app.get("/manager.html", include_in_schema=False, dependencies=[Depends(require_manager)])
-def manager_page():
+@app.get("/manager", include_in_schema=False)
+@app.get("/manager.html", include_in_schema=False)
+def manager_page(request: Request, credentials: HTTPBasicCredentials | None = Depends(basic)):
+    if config.DEMO_AUTH:
+        user = auth.account(request)
+        if not user or user["role"] != "admin":
+            return RedirectResponse("/index.html", status_code=303)
+    else:
+        require_manager(request, credentials)
     page = config.FRONTEND_DIR / "manager.html"
     if not page.is_file():
         raise HTTPException(404, "Панель менеджера не найдена")

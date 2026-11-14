@@ -39,6 +39,7 @@ MANAGER_PASSWORD = os.getenv("MANAGER_PASSWORD", "").strip()
 # Показ входа клиента: если задан номер, каждый посетитель считается вошедшим с этим номером
 # и видит колонку «Ваши диалоги». Настоящий вход по номеру появится при интеграции с сайтом
 DEMO_CLIENT_PHONE = os.getenv("DEMO_CLIENT_PHONE", "").strip()
+DEMO_AUTH = os.getenv("DEMO_AUTH", "1").strip() == "1"  # быстрый вход в четыре вымышленных аккаунта
 
 RETENTION_DAYS = 30        # срок хранения сессий; обещан клиенту на frontend/privacy.html
 MAX_MESSAGE_CHARS = 4000   # предел длины одной реплики клиента
