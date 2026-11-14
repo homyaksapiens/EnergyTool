@@ -23,6 +23,7 @@ from settings import API_KEY, BASE_URL, CANDIDATES, CONTEXT_CHUNKS, LLM_MODEL, M
 ROLE_RE = re.compile(r"^\s*(Пользователь|Клиент|User|Ассистент|Консультант|Бот|Assistant)\s*:\s*(.*)$", re.I)
 ASSISTANT_ROLES = {"ассистент", "консультант", "бот", "assistant"}
 THINK_RE = re.compile(r"<think>.*?</think>", re.S)
+XML_TAG_RE = re.compile(r"</?[a-zа-яё0-9_]+>", re.I)
 CITE_RE = re.compile(r"\s*\[\d+(?:\s*,\s*\d+)*\]")
 MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 
@@ -31,12 +32,11 @@ USE_DIALOG_SUMMARY = os.getenv("ET_USE_SUMMARY", "1").strip() != "0"
 SUMMARY_MAX_TOKENS = 256
 SUMMARY_TIMEOUT = 15.0
 SUMMARY_SYSTEM_PROMPT = (
-    "Ты — модуль конденсации контекста диалога для поиска и ответа по базе знаний. Сожми весь диалог в 1–2 "
-    "информативных предложения (до 45 слов), сохранив: исходную задачу и тип объекта, ВСЕ названные клиентом "
-    "параметры, количественные показатели, сроки, ценовые категории, способы сбора данных, высказанные ограничения, "
-    "предложенные в диалоге варианты (например, предварительную оценку или тип решения) и текущий вопрос клиента. "
-    "НЕ используй фразы «начать разговор» или «первичное понимание». Сохрани все цифры и ключевые термины дословно. "
-    "Не отвечай на вопрос. Пиши сразу готовую выжимку без рассуждений. /no_think"
+    "Ты — модуль сжатия истории диалога для информационного поиска. Кратко (1–2 предложения, до 45 слов) зафиксируй "
+    "суть диалога: исходную задачу и тип объекта клиента, все сообщённые им количественные параметры, характеристики "
+    "оборудования, режим работы, ограничения, контекст последнего обмена репликами и текущий вопрос клиента. "
+    "Используй только явно названные в диалоге сведения, ничего не додумывай от себя и не отвечай на вопрос. "
+    "Сохраняй цифры и термины дословно. Выведи только готовую выжимку без рассуждений. /no_think"
 )
 
 _SUMMARY_CACHE: dict[tuple[tuple[str, str], ...], str] = {}
@@ -46,19 +46,6 @@ _MAX_SUMMARY_FAILURES = 3
 
 # Увеличенный лимит токенов для основного ответа: позволяет модели глубоко рассуждать в <think> без обрыва
 ANSWER_MAX_TOKENS = max(MAX_TOKENS, 2048)
-
-# Секции, которые в многоходовом диалоге откладываются в резерв, чтобы не вытеснять продуктовые чанки
-DIALOG_DEFER_LEAVES = {
-    "с чего начинается разговор",
-    "с чего начать",
-    "для первичного понимания задачи",
-}
-SINGLE_CAP_LEAVES = {
-    "сколько это стоит",
-    "сколько стоит расчёт",
-    "следующий шаг",
-    "сроки реализации",
-}
 
 
 def parse_dialog(text: str) -> list[dict]:
@@ -86,6 +73,7 @@ def clean_answer(text: str) -> str:
     text = THINK_RE.sub("", text)
     if "<think>" in text:  # рассуждение оборвалось по лимиту токенов — ответа нет
         text = text.split("<think>", 1)[0]
+    text = XML_TAG_RE.sub("", text)
     text = MD_LINK_RE.sub(r"\1", text)
     text = CITE_RE.sub("", text)
     text = re.sub(r"\*\*|__|`|^#+\s*", "", text, flags=re.M)
@@ -108,7 +96,7 @@ def _dialog_key(messages: list[dict]) -> tuple[tuple[str, str], ...]:
 
 
 def _deterministic_summary(messages: list[dict]) -> str:
-    """Детерминированная сборка контекста: все реплики клиента + последний вопрос/предложение ассистента."""
+    """Детерминированная сборка контекста: все реплики клиента + последний обмен репликами."""
     users = [m["content"].strip() for m in messages if m["role"] == "user" and m["content"].strip()]
     if not users:
         return " ".join(m["content"].strip() for m in messages if m["content"].strip())
@@ -170,14 +158,14 @@ def summarize_dialog(messages: list[dict]) -> str:
         return fallback
 
     history_lines = [
-        f"{'Клиент' if m['role'] == 'user' else 'Консультант'}: {m['content'].strip()}"
+        f"{'Клиент' if m['role'] == 'user' else 'Ассистент'}: {m['content'].strip()}"
         for m in messages
         if m.get("content", "").strip()
     ]
     user_prompt = (
         "История диалога:\n" + "\n".join(history_lines) + "\n\n"
-        "Сожми этот диалог в 1–2 предложения со всеми фактами, цифрами, условиями клиента, предложенными в диалоге "
-        "вариантами и финальным вопросом. /no_think"
+        "Сожми этот диалог в 1–2 предложения со всеми названными фактами, цифрами, условиями клиента "
+        "и текущим вопросом. /no_think"
     )
     summary_msgs = [
         {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
@@ -209,7 +197,7 @@ def search_queries(messages: list[dict]) -> list[str]:
     - Одиночный вопрос: [last]
     - Диалог:
       1) global_problem (1-я реплика клиента с исходной темой)
-      2) last_exchange (последняя реплика консультанта + ответ клиента)
+      2) last_exchange (последняя реплика ассистента + ответ клиента)
       3) user_only (все реплики самого клиента)
       4) rerank_target (queries[-1]) — сфокусированный запрос для реранкера (исходная тема + выжимка + финальный вопрос).
     """
@@ -259,60 +247,53 @@ def search_queries(messages: list[dict]) -> list[str]:
 
 
 def build_dialog_message(messages: list[dict], summary: str) -> str:
-    """Формирует запрос для многоходового диалога по трёхчастной схеме:
-    1) {контекст предыдущих сообщений} — сжатая выжимка диалога + предыдущие реплики для сохранения всех деталей;
-    2) {текущее сообщение} — последняя реплика клиента, на которую нужно ответить;
-    3) {напоминание} — установка следовать правилам системного промпта и дать полноценный развёрнутый ответ.
+    """Формирует входное сообщение для многоходового диалога в соответствии со структурой SYSTEM_PROMPT:
+    <контекст_диалога> (служебное резюме + исходные реплики) и <текущая_реплика_клиента>.
     """
     if len(messages) <= 1:
         return messages[0]["content"].strip() if messages else ""
 
     last_user = messages[-1]["content"].strip()
     prev_lines = [
-        f"— {'Клиент' if m['role'] == 'user' else 'Консультант'}: {m['content'].strip()}"
+        f"{'Клиент' if m['role'] == 'user' else 'Ассистент'}: {m['content'].strip()}"
         for m in messages[:-1]
         if m.get("content", "").strip()
     ]
     prev_block = "\n".join(prev_lines)
 
     return (
-        f"Контекст предыдущих сообщений диалога:\n"
-        f"{summary}\n"
-        f"(Краткая справка по предыдущим репликам:\n{prev_block})\n\n"
-        f"Текущее сообщение клиента:\n"
-        f"{last_user}\n\n"
-        f"Напоминание: ответь на текущее сообщение клиента строго по правилам системного промпта "
-        f"(связный текст из 2–4 предложений, 35–70 слов). Используй факты, пороги и условия из материалов базы знаний, "
-        f"обязательно учти все вводные клиента из контекста диалога и не переспрашивай то, что он уже сообщил."
+        f"<контекст_диалога>\n"
+        f"Служебное резюме диалога: {summary}\n\n"
+        f"Исходные реплики до текущего вопроса:\n{prev_block}\n"
+        f"</контекст_диалога>\n\n"
+        f"<текущая_реплика_клиента>\n"
+        f"{last_user}\n"
+        f"</текущая_реплика_клиента>"
     )
 
 
-def _diversify_reranked(candidates: list[Chunk], order: list[int], k: int, is_dialog: bool = False) -> list[Chunk]:
-    """Защищает Top-k от:
-    1) забивания одноимёнными секциями («Сколько это стоит»);
-    2) вытеснения продуктовых чанков общими стартовыми секциями («Для первичного понимания задачи») в диалогах;
-    3) перекоса в сторону только одного файла продукта, когда в диалоге затронуты две темы/продукта.
+def _diversify_reranked(candidates: list[Chunk], order: list[int], k: int) -> list[Chunk]:
+    """Обеспечивает разнообразие разделов в Top-k: не даёт одноимённым секциям из разных файлов
+    забить всю выдачу реранкера, сохраняя при этом порядок релевантности.
     """
     selected: list[Chunk] = []
     deferred: list[Chunk] = []
+    leaf_sources: dict[str, set[str]] = {}
     leaf_counts: dict[str, int] = {}
-    source_counts: dict[str, int] = {}
-    max_per_source = 3 if is_dialog else k
 
     for idx in order:
         if 0 <= idx < len(candidates):
             c = candidates[idx]
             leaf = c.title.rsplit("→", 1)[-1].strip().lower()
-            if is_dialog and leaf in DIALOG_DEFER_LEAVES:
-                deferred.append(c)
-                continue
-            max_same_leaf = 1 if leaf in SINGLE_CAP_LEAVES else 2
-            if leaf_counts.get(leaf, 0) >= max_same_leaf or source_counts.get(c.source, 0) >= max_per_source:
+            seen_sources = leaf_sources.get(leaf, set())
+            # Если секция с таким же конечным заголовком уже взята из другого документа или превышен лимит (2),
+            # откладываем дубль во второй проход, чтобы пропустить вперёд другие аспекты темы
+            if (seen_sources and c.source not in seen_sources) or leaf_counts.get(leaf, 0) >= 2:
                 deferred.append(c)
                 continue
             selected.append(c)
+            leaf_sources.setdefault(leaf, set()).add(c.source)
             leaf_counts[leaf] = leaf_counts.get(leaf, 0) + 1
-            source_counts[c.source] = source_counts.get(c.source, 0) + 1
             if len(selected) >= k:
                 return selected
 
@@ -347,9 +328,7 @@ class Consultant:
                 order = llm_client.rerank(queries[-1][:2000], [c.render()[:2000] for c in candidates], CANDIDATES)
                 if order:
                     self.rerank_failures = 0
-                    top_chunks = _diversify_reranked(
-                        candidates, order, CONTEXT_CHUNKS, is_dialog=(len(messages) > 1)
-                    )
+                    top_chunks = _diversify_reranked(candidates, order, CONTEXT_CHUNKS)
                     return top_chunks, candidates, queries, True
             except llm_client.ApiError as e:
                 self._rerank_failed(f"Реранкер недоступен: {e}", permanent=e.status in (400, 404, 405, 422, 501))
