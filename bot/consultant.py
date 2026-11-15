@@ -22,8 +22,8 @@ ROLE_RE = re.compile(r"^\s*(Пользователь|Клиент|User|Асси�
 ASSISTANT_ROLES = {"ассистент", "консультант", "бот", "assistant"}
 THINK_RE = re.compile(r"<think>.*?</think>", re.S)
 
-# Гарантированный бюджет токенов на 1-й попытке, чтобы глубокое рассуждение <think> не обрывалось
-THINK_MAX_TOKENS = max(MAX_TOKENS, 2500)
+# Короткий бюджет токенов для режима think low: хватает на сжатую сверку фактов и ответ без лишних домыслов
+THINK_MAX_TOKENS = max(MAX_TOKENS, 1200)
 
 SUMMARY_MAX_TOKENS = 192
 SUMMARY_SYSTEM_PROMPT = (
@@ -167,9 +167,11 @@ def format_dialog_sandwich(messages: list[dict]) -> list[dict]:
         f"Последняя реплика клиента (ответь на неё):\n{last_reply}\n\n"
         f"Напоминание правил ответа: ответь на последнюю реплику клиента с учётом его исходной задачи и всех "
         f"сообщённых им фактов строго по материалам EnergyTool. Начни с прямого ответа по сути («Да, …», «Нет, …» "
-        f"или сама суть), затем 1–2 предложения: от чего зависит результат для ситуации клиента или важная оговорка. "
-        f"Объём — 2–4 предложения, 30–70 слов, обычный связный текст без списков и markdown. В конце задай один "
-        f"уточняющий вопрос для подбора решения, но НЕ спрашивай то, что клиент уже сообщил выше."
+        f"или сама суть), затем перечисли через запятую все ключевые условия, проверяемые параметры, способы решения "
+        f"и важные оговорки из соответствующего раздела материалов без пропуска деталей и без добавления лишних "
+        f"параметров из других тем. Объём — 2–4 предложения, 30–70 слов, обычный связный текст без списков и "
+        f"markdown. В конце задай один уточняющий вопрос или предложи следующий шаг, но НЕ спрашивай то, что клиент "
+        f"уже сообщил выше."
     )
     return [{"role": "user", "content": sandwich_prompt}]
 
@@ -218,11 +220,13 @@ class Consultant:
             if attempt == 0:
                 msgs = convo[:-1] + [{**convo[-1], "content": convo[-1]["content"] + " /think"}]
                 tokens_limit = THINK_MAX_TOKENS
+                effort = "low"
             else:  # модель могла уйти в рассуждения и не успеть ответить — просим без них
                 msgs = convo[:-1] + [{**convo[-1], "content": convo[-1]["content"] + " /no_think"}]
                 tokens_limit = MAX_TOKENS
+                effort = None
             try:
-                raw, _ = llm_client.chat(msgs, TEMPERATURE, tokens_limit)
+                raw, _ = llm_client.chat(msgs, TEMPERATURE, tokens_limit, reasoning_effort=effort)
             except (llm_client.ApiError, KeyError, IndexError, TypeError, ValueError) as e:
                 print(f"LLM: {e!r}", file=sys.stderr)
                 break
