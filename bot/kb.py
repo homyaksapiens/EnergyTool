@@ -18,6 +18,8 @@ from pathlib import Path
 import numpy as np
 
 MAX_CHUNK_CHARS = 1950
+MERGE_SUBSECTION_CHARS = 700
+TINY_SUBSECTION_CHARS = 220
 
 
 @dataclass
@@ -119,21 +121,27 @@ def normalize(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-HEAD_RE = re.compile(r"^(#{1,4})\s+(.*\S)\s*$")
+# Нарезаем только по крупным заголовкам #{1,3}, не дробя #### на микро-чанки
+HEAD_RE = re.compile(r"^(#{1,3})\s+(.*\S)\s*$")
+SUBHEAD4_RE = re.compile(r"^#{4,}\s+(.*\S)\s*$")
 
 
 def _sections(text: str, fallback_title: str) -> list[tuple[str, str]]:
     doc, stack = fallback_title, []
     buf: list[str] = []
-    out = []
+    raw_sections: list[tuple[str, list[str], str]] = []
 
     def flush():
         body = "\n".join(buf).strip()
         if body:
-            out.append((" → ".join([doc] + stack), body))
+            raw_sections.append((doc, list(stack), body))
         buf.clear()
 
     for line in text.split("\n"):
+        m4 = SUBHEAD4_RE.match(line)
+        if m4:
+            buf.append(f"{m4.group(1)}:")
+            continue
         m = HEAD_RE.match(line)
         if not m:
             buf.append(line)
@@ -145,7 +153,28 @@ def _sections(text: str, fallback_title: str) -> list[tuple[str, str]]:
         else:
             stack = stack[:level - 2] + [heading]
     flush()
-    return out
+
+    # Склеиваем крошечные соседние подсекции одного родительского раздела ## (суммарно < 700 символов)
+    merged: list[tuple[str, list[str], str]] = []
+    for cur_doc, cur_stack, cur_body in raw_sections:
+        if merged:
+            prev_doc, prev_stack, prev_body = merged[-1]
+            same_parent_h2 = (
+                prev_doc == cur_doc
+                and len(prev_stack) >= 1
+                and len(cur_stack) >= 1
+                and prev_stack[0] == cur_stack[0]
+            )
+            is_tiny = len(prev_body) < TINY_SUBSECTION_CHARS or len(cur_body) < TINY_SUBSECTION_CHARS
+            if same_parent_h2 and is_tiny and (len(prev_body) + len(cur_body) + 40 <= MERGE_SUBSECTION_CHARS):
+                cur_heading = cur_stack[-1] if len(cur_stack) > len(prev_stack) or cur_stack != prev_stack else ""
+                addon = f"{cur_heading}:\n{cur_body}" if cur_heading else cur_body
+                merged_stack = prev_stack if len(prev_stack) >= len(cur_stack) else cur_stack
+                merged[-1] = (prev_doc, merged_stack, f"{prev_body}\n\n{addon}")
+                continue
+        merged.append((cur_doc, cur_stack, cur_body))
+
+    return [(" → ".join([d] + s), b) for d, s, b in merged]
 
 
 def _split_long(body: str, limit: int = MAX_CHUNK_CHARS, sep: str = "\n\n") -> list[str]:
@@ -238,7 +267,7 @@ class KnowledgeBase:
         vectors = np.asarray(embed_fn([c.render()[:2000] for c in self.chunks]), dtype=np.float32)
         self.vectors = _unit(vectors)
 
-    def search(self, queries: list[str], query_vectors=None, k: int = 16) -> list[Chunk]:
+    def search(self, queries: list[str], query_vectors=None, k: int = 28) -> list[Chunk]:
         """Гибридный поиск: по каждому запросу свой список BM25 (+ векторный с повышенным весом), затем RRF."""
         fused: Counter = Counter()
         for query in queries:

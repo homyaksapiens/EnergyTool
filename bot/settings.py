@@ -41,8 +41,8 @@ MAX_TOKENS = max(number("MAX_TOKENS", 1024, 128, 8192), 512)
 MAX_WORKERS = number("MAX_WORKERS", 4, 1, 16)
 DATA_DIR = env("DATA_DIR", "data")
 
-CANDIDATES = number("ET_CANDIDATES", 16, 4, 50)  # сколько фрагментов отдаём реранкеру
-CONTEXT_CHUNKS = number("ET_CONTEXT_CHUNKS", 6, 1, 15)  # сколько фрагментов попадает в промпт
+CANDIDATES = number("ET_CANDIDATES", 28, 4, 50)  # сколько фрагментов отдаём реранкеру
+CONTEXT_CHUNKS = number("ET_CONTEXT_CHUNKS", 10, 1, 15)  # сколько фрагментов попадает в промпт
 USE_DENSE = env("ET_USE_DENSE", "1") == "1"
 USE_RERANK = env("ET_USE_RERANK", "1") == "1"
 TIME_BUDGET = number("ET_TIME_BUDGET", 1020, 60, 3600)  # секунд на весь прогон; лимит платформы — 1200

@@ -1,260 +1,285 @@
+"""Ядро консультанта: разбор диалога → поиск по базе знаний → один вызов LLM → чистка ответа.
+
+Используется и в solution.py (автосабмит), и в веб-бэкенде. Tool calling не используем: прокси
+платформы его не гарантирует, а лишние вызовы LLM съедают лимит времени.
+
+Берет вопрос клиента, ищет подходящие куски текста через kb.py, пропускает их через реранкер (если он доступен),
+подставляет в шаблон промпта и отправляет в языковую модель.
+"""
 from __future__ import annotations
 
 import re
+import sys
+import threading
+import time
 
 import llm_client
-from kb import Chunk, KnowledgeBase, tokenize
-from prompts import DIALOG_SUMMARY_PROMPT, QUERY_EXPANSION_PROMPT, SYSTEM_PROMPT
-from settings import FINAL_K, MAX_CONTEXT_CHARS, MAX_TOKENS, TEMPERATURE, TOP_K
+from kb import Chunk, KnowledgeBase
+from prompts import FALLBACK_ANSWER, build_system
+from settings import CANDIDATES, CONTEXT_CHUNKS, MAX_TOKENS, TEMPERATURE, USE_RERANK
 
-FALLBACK_ANSWER = (
-    "По этому вопросу нужна дополнительная проверка параметров вашего объекта. "
-    "Подскажите, пожалуйста, основные характеристики объекта и текущую схему учёта, "
-    "чтобы мы подобрали точное решение."
-)
+ROLE_RE = re.compile(r"^\s*(Пользователь|Клиент|User|Ассистент|Консультант|Бот|Assistant)\s*:\s*(.*)$", re.I)
+ASSISTANT_ROLES = {"ассистент", "консультант", "бот", "assistant"}
+THINK_RE = re.compile(r"<think>.*?</think>", re.S)
 
-ROLE_RE = re.compile(
-    r"(?:^|\n)\s*(Пользователь|Клиент|Ассистент|Консультант|User|Assistant)\s*:\s*",
-    re.IGNORECASE,
-)
-THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+# Гарантированный бюджет токенов на 1-й попытке, чтобы глубокое рассуждение <think> не обрывалось
 THINK_MAX_TOKENS = max(MAX_TOKENS, 2500)
 
+SUMMARY_MAX_TOKENS = 192
+SUMMARY_SYSTEM_PROMPT = (
+    "Перепиши последнюю реплику диалога в один самодостаточный поисковый запрос для базы знаний (до 30 слов). "
+    "Правила:\n"
+    "1. Главный фокус — строго на последнем вопросе и последней реплике клиента.\n"
+    "2. Замени местоимения и неполные ссылки («это», «таких данных», «четвёртая», «для оценки») "
+    "на конкретные термины, тип объекта, цифры и условия из предыдущих реплик диалога.\n"
+    "3. ЗАПРЕЩЕНО использовать водные и мета-слова: «клиент», «пользователь», «консультант», «ассистент», "
+    "«спрашивает», «интересуется», «хочет узнать», «просит объяснить», «в диалоге».\n"
+    "4. Не отвечай на вопрос и ничего не додумывай. Выведи только одну строку — готовый запрос без кавычек."
+)
 
-def parse_dialog(raw: str) -> list[dict[str, str]]:
-    text = (raw or "").strip()
-    if not text:
-        return []
-    matches = list(ROLE_RE.finditer(text))
-    if not matches:
-        return [{"role": "user", "content": text}]
+EXPAND_MAX_TOKENS = 96
+QUERY_EXPANSION_PROMPT = (
+    "Ты помогаешь поисковой системе по базе знаний энергетического консалтинга МТС EnergyTool. "
+    "Прочитай вопрос клиента и выпиши 5–8 ключевых поисковых терминов и понятий строго по теме вопроса "
+    "(технические характеристики, ограничения, сроки службы, пороги мощности или проверяемые параметры), "
+    "которые помогут найти полный ответ в документации. "
+    "Не меняй тему вопроса, не добавляй общие слова вроде «объект», «стоимость», «оценка», «тариф», «расчёт», "
+    "если о них не спрашивают напрямую, и не отвечай на вопрос. "
+    "Выведи только ключевые слова через пробел без кавычек и списков."
+)
 
-    messages: list[dict[str, str]] = []
-    for idx, match in enumerate(matches):
-        role_label = match.group(1).lower()
-        start = match.end()
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
-        content = text[start:end].strip()
-        if not content:
-            continue
-        role = "user" if role_label in ("пользователь", "клиент", "user") else "assistant"
-        messages.append({"role": role, "content": content})
-    return messages or [{"role": "user", "content": text}]
+_SUMMARY_CACHE: dict[tuple[tuple[str, str], ...], str] = {}
+_SUMMARY_LOCK = threading.Lock()
 
-
-def summarize_dialog(messages: list[dict[str, str]]) -> str | None:
-    if len(messages) <= 1:
-        return None
-    lines = []
-    for item in messages:
-        role = "Клиент" if item["role"] == "user" else "Консультант"
-        lines.append(f"{role}: {item['content']}")
-    dialog = "\n".join(lines)[-1800:]
-    text, _ = llm_client.chat(
-        [
-            {"role": "system", "content": DIALOG_SUMMARY_PROMPT},
-            {"role": "user", "content": f"/no_think\nДиалог:\n{dialog}\n\nПоисковый запрос:"},
-        ],
-        temperature=0.0,
-        max_tokens=120,
-    )
-    cleaned = clean_answer(text or "")
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" «»\"'")
-    return cleaned if len(cleaned) >= 5 else None
+_EXPAND_CACHE: dict[str, str] = {}
+_EXPAND_LOCK = threading.Lock()
 
 
-def expand_single_query(question: str) -> str | None:
-    text, _ = llm_client.chat(
-        [
-            {"role": "system", "content": QUERY_EXPANSION_PROMPT},
-            {"role": "user", "content": f"/no_think\nВопрос клиента:\n{question}\n\nКлючевые термины:"},
-        ],
-        temperature=0.0,
-        max_tokens=80,
-    )
-    cleaned = clean_answer(text or "")
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" «»\"'")
-    return cleaned if len(cleaned) >= 5 else None
-
-
-def search_queries(messages: list[dict[str, str]]) -> list[str]:
-    users = [m["content"] for m in messages if m["role"] == "user"]
-    if not users:
-        return [""]
-    last = users[-1]
-    if len(users) == 1:
-        expanded = expand_single_query(last)
-        if expanded and expanded.lower() != last.lower():
-            return [last, f"{last} {expanded}"]
-        return [last]
-    queries = [last, " ".join(users[-2:]), " ".join(users)]
-    summary = summarize_dialog(messages)
-    if summary:
-        queries.append(summary)
-    unique = []
-    for q in queries:
-        if q and q not in unique:
-            unique.append(q)
-    return unique
-
-
-def build_system(chunks: list[Chunk]) -> str:
-    blocks = []
-    total = 0
-    for idx, chunk in enumerate(chunks, 1):
-        block = f"[{idx}] {chunk.breadcrumb}\n{chunk.body}"
-        if total + len(block) > MAX_CONTEXT_CHARS and blocks:
-            break
-        blocks.append(block)
-        total += len(block)
-    context = "\n\n".join(blocks)
-    return f"{SYSTEM_PROMPT}\n\nСправочные материалы:\n{context}"
-
-
-def format_dialog_sandwich(messages: list[dict[str, str]]) -> list[dict[str, str]]:
-    if len(messages) <= 1:
-        return messages
-
-    history_lines = []
-    for m in messages[:-1]:
-        role_name = "Клиент" if m["role"] == "user" else "Консультант"
-        history_lines.append(f"{role_name}: {m['content']}")
-    history_block = "\n".join(history_lines)
-
-    users = [m["content"] for m in messages if m["role"] == "user"]
-    known_facts = " ".join(users[:-1]) if len(users) > 1 else ""
-    last_question = messages[-1]["content"]
-
-    content = (
-        f"Контекст диалога:\n{history_block}\n\n"
-        f"Что клиент уже сообщил о своей ситуации: {known_facts}\n\n"
-        f"Текущий вопрос клиента: {last_question}\n\n"
-        "Ответь на текущий вопрос клиента с учётом всего контекста диалога и справочных материалов: "
-        "дай прямой ответ, укажи ключевые условия/ограничения и что нужно проверить или какие данные понадобятся дальше. "
-        "В конце при необходимости задай один уточняющий вопрос, но НЕ спрашивай то, что клиент уже сообщил выше."
-    )
-    return [{"role": "user", "content": content}]
+def parse_dialog(text: str) -> list[dict]:
+    """Строка вопроса → [{"role", "content"}]. Диалог в тестах — реплики «Пользователь: …» / «Ассистент: …»."""
+    messages: list[dict] = []
+    for line in text.strip().split("\n"):
+        m = ROLE_RE.match(line)
+        if m:
+            role = "assistant" if m.group(1).lower() in ASSISTANT_ROLES else "user"
+            if messages and messages[-1]["role"] == role:
+                messages[-1]["content"] += "\n" + m.group(2).strip()
+            else:
+                messages.append({"role": role, "content": m.group(2).strip()})
+        elif messages:
+            messages[-1]["content"] += "\n" + line.strip()
+        else:
+            messages.append({"role": "user", "content": line.strip()})
+    return [m for m in messages if m["content"].strip()] or [{"role": "user", "content": text.strip()}]
 
 
 def clean_answer(text: str) -> str:
-    cleaned = THINK_RE.sub("", text or "").strip()
-    cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
-    cleaned = re.sub(r"\n?```$", "", cleaned).strip()
-    cleaned = re.sub(r"^(Ответ|Консультант|Ассистент)\s*:\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    text = text or ""
+    if "</think>" in text:  # рассуждение могло начаться ещё в шаблоне промпта — берём то, что после него
+        text = text.rsplit("</think>", 1)[1]
+    text = THINK_RE.sub("", text)
+    if "<think>" in text:  # рассуждение оборвалось по лимиту токенов — ответа нет
+        text = text.split("<think>", 1)[0]
+    text = re.sub(r"\*\*|__|`|^#+\s*", "", text, flags=re.M)
+    text = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", text, flags=re.M)
+    return " ".join(text.split())
 
-    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
-    normalized_lines = []
-    for line in lines:
-        line = re.sub(r"^[\-\•\*]\s+", "", line)
-        line = re.sub(r"^\d+[\.\)]\s+", "", line)
-        line = re.sub(r"\*\*(.*?)\*\*", r"\1", line)
-        normalized_lines.append(line)
 
-    result = " ".join(normalized_lines)
-    result = re.sub(r"\s{2,}", " ", result).strip()
-    return result
+def _dialog_cache_key(messages: list[dict]) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (m.get("role", "user"), m.get("content", "").strip())
+        for m in messages
+        if m.get("content", "").strip()
+    )
+
+
+def summarize_dialog(messages: list[dict]) -> str:
+    """Деконтекстуализация последнего вопроса диалога без водных слов (/no_think, с кэшированием)."""
+    if len(messages) <= 1:
+        return ""
+
+    key = _dialog_cache_key(messages)
+    with _SUMMARY_LOCK:
+        if key in _SUMMARY_CACHE:
+            return _SUMMARY_CACHE[key]
+
+    lines = [
+        f"{'Клиент' if m['role'] == 'user' else 'Консультант'}: {m['content'].strip()}"
+        for m in messages
+        if m["content"].strip()
+    ]
+    dialog_text = "\n".join(lines)
+    convo = [
+        {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+        {"role": "user", "content": f"{dialog_text}\n\nПоисковый запрос по последней реплике: /no_think"},
+    ]
+    summary = ""
+    try:
+        raw, _ = llm_client.chat(convo, temperature=0.0, max_tokens=SUMMARY_MAX_TOKENS)
+        summary = clean_answer(raw).strip("«»\"'")
+    except Exception as e:  # noqa: BLE001 — при любой ошибке работаем по базовым запросам без падения
+        print(f"Суммаризатор диалога недоступен: {e!r}", file=sys.stderr)
+        summary = ""
+
+    with _SUMMARY_LOCK:
+        _SUMMARY_CACHE[key] = summary
+    return summary
+
+
+def expand_single_query(question: str) -> str:
+    """Расширение короткого одиночного вопроса ключевыми терминами предметной области (/no_think, с кэшированием)."""
+    q = (question or "").strip()
+    if not q:
+        return ""
+
+    with _EXPAND_LOCK:
+        if q in _EXPAND_CACHE:
+            return _EXPAND_CACHE[q]
+
+    convo = [
+        {"role": "system", "content": QUERY_EXPANSION_PROMPT},
+        {"role": "user", "content": f"Вопрос клиента:\n{q}\n\nКлючевые термины: /no_think"},
+    ]
+    expanded = ""
+    try:
+        raw, _ = llm_client.chat(convo, temperature=0.0, max_tokens=EXPAND_MAX_TOKENS)
+        expanded = clean_answer(raw).strip("«»\"'")
+    except Exception as e:  # noqa: BLE001 — при любой ошибке работаем по базовому запросу без падения
+        print(f"Расширение запроса недоступно: {e!r}", file=sys.stderr)
+        expanded = ""
+
+    with _EXPAND_LOCK:
+        _EXPAND_CACHE[q] = expanded
+    return expanded
+
+
+def search_queries(messages: list[dict]) -> list[str]:
+    """Формирует поисковые запросы без размытия весов токенов:
+    - Одиночный вопрос: [расширенный_запрос, last] (последним идёт чистый вопрос клиента для реранкера)
+    - Диалог: [глобальная_проблема, текущий_обмен, весь_диалог, сфокусированный_запрос_без_воды (для реранкера)]
+    """
+    users = [m["content"].strip() for m in messages if m["role"] == "user" and m["content"].strip()]
+    last = users[-1] if users else ""
+    full = " ".join(m["content"].strip() for m in messages if m["content"].strip())
+    if full == last or len(messages) <= 1:
+        expanded = expand_single_query(last)
+        if expanded and expanded.lower() != last.lower():
+            return [f"{last} {expanded}", last]
+        return [last]
+
+    global_problem = users[0] if users else last
+    if len(messages) >= 2 and messages[-2]["role"] == "assistant":
+        last_exchange = f"{messages[-2]['content'].strip()} {last}".strip()
+    else:
+        last_exchange = last
+
+    summary = summarize_dialog(messages)
+
+    queries: list[str] = []
+    for q in (global_problem, last_exchange, full, summary):
+        if q and q not in queries:
+            queries.append(q)
+    return queries
+
+
+def format_dialog_sandwich(messages: list[dict]) -> list[dict]:
+    """Техника «сэндвича» для многоходовых диалогов:
+    фиксирует глобальную задачу клиента, сводку уже известных фактов и напоминает правила SYSTEM_PROMPT в конце.
+    Для одиночных вопросов возвращает messages без изменений.
+    """
+    if len(messages) <= 1:
+        return messages
+
+    users = [m["content"].strip() for m in messages if m["role"] == "user" and m["content"].strip()]
+    global_goal = users[0] if users else messages[0]["content"].strip()
+    known_facts = " ".join(users)
+    last_reply = messages[-1]["content"].strip()
+    summary = summarize_dialog(messages)
+
+    history_lines = [
+        f"{'Клиент' if m['role'] == 'user' else 'Консультант'}: {m['content'].strip()}"
+        for m in messages[:-1]
+    ]
+    history_block = "\n".join(history_lines)
+    summary_line = f"Суть текущего вопроса с учётом контекста: {summary}\n" if summary else ""
+
+    sandwich_prompt = (
+        f"Исходная задача клиента (глобальная тема): {global_goal}\n"
+        f"Все факты, которые клиент уже сообщил о себе и объекте: {known_facts}\n"
+        f"{summary_line}\n"
+        f"Предыдущие реплики диалога:\n{history_block}\n\n"
+        f"Последняя реплика клиента (ответь на неё):\n{last_reply}\n\n"
+        f"Напоминание правил ответа: ответь на последнюю реплику клиента с учётом его исходной задачи и всех "
+        f"сообщённых им фактов строго по материалам EnergyTool. Начни с прямого ответа по сути («Да, …», «Нет, …» "
+        f"или сама суть), затем 1–2 предложения: от чего зависит результат для ситуации клиента или важная оговорка. "
+        f"В первом-втором предложении явно упомяни уже известные параметры клиента из истории (тип его организации/объекта и названные им вводные), связывая их с условиями из материалов. "
+        f"Объём — 2–4 предложения, 30–70 слов, обычный связный текст без списков и markdown. В конце задай один "
+        f"уточняющий вопрос для подбора решения, но НЕ спрашивай то, что клиент уже сообщил выше."
+    )
+    return [{"role": "user", "content": sandwich_prompt}]
 
 
 class Consultant:
-    def __init__(self, kb: KnowledgeBase, use_rerank: bool = True) -> None:
+    def __init__(self, kb: KnowledgeBase, use_rerank: bool = USE_RERANK):
         self.kb = kb
-        self.use_rerank = use_rerank
+        self.rerank_ok = use_rerank
 
     def _retrieve_detailed(
-        self,
-        messages: list[dict[str, str]],
-        query_vectors: list[list[float]] | None = None,
-        precomputed_queries: list[str] | None = None,
-    ) -> tuple[list[Chunk], list[Chunk], list[str], bool]:
-        queries = precomputed_queries if precomputed_queries is not None else search_queries(messages)
-        candidates = self.kb.search(queries, query_vectors=query_vectors, limit=TOP_K)
-        focus_query = queries[-1]
-        if not self.use_rerank or len(candidates) <= FINAL_K:
-            return candidates[:FINAL_K], candidates, queries, False
+        self, messages: list[dict], query_vectors=None
+    ) -> tuple[list[Chunk], bool, list[Chunk], list[str]]:
+        queries = search_queries(messages)
+        candidates = self.kb.search(queries, query_vectors, k=CANDIDATES)
+        if self.rerank_ok and len(candidates) > CONTEXT_CHUNKS:
+            try:
+                order = llm_client.rerank(
+                    queries[-1][:2000],
+                    [c.render()[:2000] for c in candidates],
+                    CONTEXT_CHUNKS,
+                )
+                if order:
+                    return [candidates[i] for i in order][:CONTEXT_CHUNKS], True, candidates, queries
+            except llm_client.ApiError as e:
+                if e.status in (400, 404, 405, 422, 501):  # эндпоинта нет — больше не пробуем
+                    self.rerank_ok = False
+                print(f"Реранкер недоступен: {e}", file=sys.stderr)
+            except (KeyError, TypeError, ValueError) as e:
+                print(f"Реранкер вернул неожиданный ответ: {e!r}", file=sys.stderr)
+        return candidates[:CONTEXT_CHUNKS], False, candidates, queries
 
-        rerank_query = queries[0] if len(messages) <= 1 else f"Контекст: {focus_query}\nВопрос: {queries[0]}"
-        scores = llm_client.rerank(
-            rerank_query,
-            [f"{c.breadcrumb}\n{c.body}" for c in candidates],
-        )
-        if not scores or len(scores) != len(candidates):
-            return candidates[:FINAL_K], candidates, queries, False
+    def retrieve(self, messages: list[dict], query_vectors=None) -> tuple[list[Chunk], bool]:
+        chunks, reranked, _, _ = self._retrieve_detailed(messages, query_vectors)
+        return chunks, reranked
 
-        min_r, max_r = min(scores), max(scores)
-        span_r = max(max_r - min_r, 1e-6)
-        rerank_norm = [(s - min_r) / span_r for s in scores]
-        base_norm = [(len(candidates) - i) / len(candidates) for i in range(len(candidates))]
-
-        focus_terms = [t for t in tokenize(focus_query) if len(t) >= 4]
-        doc_sets = [c.tokens | c.title_tokens for c in candidates]
-        specificity = []
-        for dset in doc_sets:
-            spec = 0.0
-            for term in focus_terms:
-                if term in dset:
-                    df = sum(1 for s in doc_sets if term in s)
-                    spec += 1.0 / max(1, df)
-            specificity.append(spec)
-        max_spec = max(specificity) if specificity and max(specificity) > 0 else 1.0
-
-        ranked = []
-        for idx, (chunk, r_norm, b_norm) in enumerate(zip(candidates, rerank_norm, base_norm)):
-            spec_norm = specificity[idx] / max_spec
-            is_direct = 1.0 if chunk.section_kind == "direct" else 0.0
-            if len(messages) > 1:
-                total = 0.60 * r_norm + 0.24 * b_norm + 0.12 * spec_norm + 0.04 * is_direct
-            else:
-                total = 0.72 * r_norm + 0.20 * b_norm + 0.05 * spec_norm + 0.03 * is_direct
-            ranked.append((total, chunk))
-
-        ranked.sort(key=lambda item: item[0], reverse=True)
-        final_chunks = [chunk for _, chunk in ranked[:FINAL_K]]
-        return final_chunks, candidates, queries, True
-
-    def retrieve(
-        self,
-        messages: list[dict[str, str]],
-        query_vectors: list[list[float]] | None = None,
-        precomputed_queries: list[str] | None = None,
-    ) -> tuple[list[Chunk], list[str], bool]:
-        final_chunks, _, queries, reranked = self._retrieve_detailed(
-            messages, query_vectors=query_vectors, precomputed_queries=precomputed_queries
-        )
-        return final_chunks, queries, reranked
-
-    def answer(
-        self,
-        raw_question: str,
-        query_vectors: list[list[float]] | None = None,
-        precomputed_queries: list[str] | None = None,
-    ) -> tuple[str, dict]:
-        messages = parse_dialog(raw_question)
-        if not messages:
-            return FALLBACK_ANSWER, {"fallback": True, "sources": []}
-
-        chunks, queries, reranked = self.retrieve(
-            messages, query_vectors=query_vectors, precomputed_queries=precomputed_queries
-        )
-        convo = [{"role": "system", "content": build_system(chunks)}]
-        convo.extend(format_dialog_sandwich(messages))
-
-        reply, err = llm_client.chat(
-            convo,
-            temperature=TEMPERATURE,
-            max_tokens=THINK_MAX_TOKENS,
-        )
-        cleaned = clean_answer(reply or "")
-        if not cleaned:
-            return FALLBACK_ANSWER, {
-                "fallback": True,
-                "error": err,
-                "sources": [c.id for c in chunks],
-                "reranked": reranked,
-            }
-        return cleaned, {
-            "fallback": False,
-            "error": err,
-            "sources": [c.id for c in chunks],
-            "queries": queries,
+    def answer(self, messages: list[dict], query_vectors=None, deadline: float | None = None) -> dict:
+        """Ответ на последнюю реплику клиента: {text, sources, timings, reranked, fallback}."""
+        t0 = time.time()
+        chunks, reranked, candidates, queries = self._retrieve_detailed(messages, query_vectors)
+        t1 = time.time()
+        convo = [{"role": "system", "content": build_system(chunks)}] + format_dialog_sandwich(messages)
+        text = ""
+        for attempt in range(2):
+            if deadline and time.time() > deadline:
+                break
+            if attempt == 0:
+                msgs = convo[:-1] + [{**convo[-1], "content": convo[-1]["content"] + " /think"}]
+                tokens_limit = THINK_MAX_TOKENS
+            else:  # модель могла уйти в рассуждения и не успеть ответить — просим без них
+                msgs = convo[:-1] + [{**convo[-1], "content": convo[-1]["content"] + " /no_think"}]
+                tokens_limit = MAX_TOKENS
+            try:
+                raw, _ = llm_client.chat(msgs, TEMPERATURE, tokens_limit)
+            except (llm_client.ApiError, KeyError, IndexError, TypeError, ValueError) as e:
+                print(f"LLM: {e!r}", file=sys.stderr)
+                break
+            text = clean_answer(raw)
+            if text:
+                break
+        return {
+            "text": text or FALLBACK_ANSWER,
+            "fallback": not text,
             "reranked": reranked,
+            "sources": [{"id": c.id, "source": c.source, "title": c.title} for c in chunks],
+            "candidate_ids": [c.id for c in candidates],
+            "queries": queries,
+            "timings": {"retrieval": round(t1 - t0, 2), "llm": round(time.time() - t1, 2)},
         }
