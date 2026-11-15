@@ -54,34 +54,14 @@ def post(endpoint: str, key: str, body: dict, attempts: int = 3) -> dict:
     raise error
 
 
-def chat(
-    messages: list[dict],
-    temperature: float,
-    max_tokens: int,
-    reasoning_effort: str | None = "low",
-) -> tuple[str, str | None]:
+def chat(messages: list[dict], temperature: float, max_tokens: int) -> tuple[str, str | None]:
     """Возвращает (текст ответа, finish_reason)."""
-    last_content = (messages[-1].get("content") or "") if messages else ""
-    use_effort = reasoning_effort if "/no_think" not in last_content else None
-
-    body = {
+    data = post("/chat/completions", API_KEY, {
         "model": LLM_MODEL,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
-    }
-    if use_effort:
-        body["reasoning_effort"] = use_effort
-
-    try:
-        data = post("/chat/completions", API_KEY, body)
-    except ApiError as e:
-        if use_effort and e.status == 400:
-            body.pop("reasoning_effort", None)
-            data = post("/chat/completions", API_KEY, body)
-        else:
-            raise
-
+    })
     choice = data["choices"][0]
     return (choice.get("message") or {}).get("content") or "", choice.get("finish_reason")
 
