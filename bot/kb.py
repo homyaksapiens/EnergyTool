@@ -18,7 +18,6 @@ from pathlib import Path
 import numpy as np
 
 MAX_CHUNK_CHARS = 1950
-MERGE_SECTION_CHARS = 1200
 
 
 @dataclass
@@ -124,17 +123,14 @@ HEAD_RE = re.compile(r"^(#{1,4})\s+(.*\S)\s*$")
 
 
 def _sections(text: str, fallback_title: str) -> list[tuple[str, str]]:
-    """Разбивает документ по заголовкам и склеивает мелкие подсекции ###/#### внутри раздела ##,
-    чтобы не дробить единый смысловой блок на микро-чанки по 150–300 символов.
-    """
     doc, stack = fallback_title, []
     buf: list[str] = []
-    raw_sections: list[tuple[str, list[str], str]] = []
+    out = []
 
     def flush():
         body = "\n".join(buf).strip()
         if body:
-            raw_sections.append((doc, list(stack), body))
+            out.append((" → ".join([doc] + stack), body))
         buf.clear()
 
     for line in text.split("\n"):
@@ -149,41 +145,7 @@ def _sections(text: str, fallback_title: str) -> list[tuple[str, str]]:
         else:
             stack = stack[:level - 2] + [heading]
     flush()
-
-    # Склеиваем соседние мелкие подсекции (### и ####), если они принадлежат одному разделу ##
-    merged: list[tuple[str, str]] = []
-    i = 0
-    while i < len(raw_sections):
-        cur_doc, cur_stack, cur_body = raw_sections[i]
-        # Если это подсекция уровня ###/#### и в этом же разделе ## есть соседние мелкие подсекции
-        if len(cur_stack) >= 2 and len(cur_body) < MERGE_SECTION_CHARS:
-            parent_h2 = cur_stack[0]
-            group_title = f"{cur_doc} → {parent_h2}"
-            sub_title = " → ".join(cur_stack[1:])
-            acc_parts = [f"{sub_title}:\n{cur_body}"]
-            acc_len = len(acc_parts[0])
-            j = i + 1
-            while j < len(raw_sections):
-                nxt_doc, nxt_stack, nxt_body = raw_sections[j]
-                if nxt_doc != cur_doc or not nxt_stack or nxt_stack[0] != parent_h2:
-                    break
-                nxt_sub = " → ".join(nxt_stack[1:]) if len(nxt_stack) >= 2 else nxt_stack[0]
-                piece = f"{nxt_sub}:\n{nxt_body}" if len(nxt_stack) >= 2 else nxt_body
-                if acc_len + len(piece) + 2 > MERGE_SECTION_CHARS:
-                    break
-                acc_parts.append(piece)
-                acc_len += len(piece) + 2
-                j += 1
-            if j > i + 1:
-                merged.append((group_title, "\n\n".join(acc_parts)))
-                i = j
-                continue
-
-        full_title = " → ".join([cur_doc] + cur_stack)
-        merged.append((full_title, cur_body))
-        i += 1
-
-    return merged
+    return out
 
 
 def _split_long(body: str, limit: int = MAX_CHUNK_CHARS, sep: str = "\n\n") -> list[str]:
