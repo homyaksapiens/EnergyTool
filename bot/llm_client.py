@@ -89,3 +89,4 @@ def rerank(query: str, documents: list[str], top_n: int) -> list[int]:
     items = data.get("results") or data.get("data") or []
     items = sorted(items, key=lambda item: -float(item.get("relevance_score", item.get("score", 0))))
     return [int(item["index"]) for item in items if 0 <= int(item["index"]) < len(documents)]
+

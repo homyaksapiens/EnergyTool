@@ -67,9 +67,11 @@ def embed_queries(kb: KnowledgeBase, ids: list[str], dialogs: dict) -> dict:
         return {}
 
     try:
-        texts = sorted({q[:2000] for qid in ids for q in search_queries(dialogs[qid]) if q.strip()})
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            queries_by_id = dict(zip(ids, pool.map(lambda qid: search_queries(dialogs[qid]), ids)))
+        texts = sorted({q[:2000] for qs in queries_by_id.values() for q in qs if q.strip()})
         vectors = dict(zip(texts, llm_client.embed(texts))) if texts else {}
-        return {qid: [vectors.get(q[:2000]) for q in search_queries(dialogs[qid])] for qid in ids}
+        return {qid: [vectors.get(q[:2000]) for q in queries_by_id[qid]] for qid in ids}
     except Exception as e:  # noqa: BLE001 — kb.vectors сохраняем, kb.search досчитает поштучно при необходимости
         log(f"Пакетный эмбеддинг запросов не удался ({type(e).__name__}: {e}); считаем на лету")
         return {}

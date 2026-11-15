@@ -18,8 +18,7 @@ from pathlib import Path
 import numpy as np
 
 MAX_CHUNK_CHARS = 1950
-MERGE_SUBSECTION_CHARS = 700
-TINY_SUBSECTION_CHARS = 220
+MIN_SECTION_MERGE_CHARS = 750
 
 
 @dataclass
@@ -121,30 +120,60 @@ def normalize(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-# Нарезаем только по крупным заголовкам #{1,3}, не дробя #### на микро-чанки
+# Нарезаем только по крупным заголовкам #{1,3}, не дробя мелкие #### подпункты
 HEAD_RE = re.compile(r"^(#{1,3})\s+(.*\S)\s*$")
 SUBHEAD4_RE = re.compile(r"^#{4,}\s+(.*\S)\s*$")
+
+
+def _parent_h2(title: str) -> list[str]:
+    parts = title.split(" → ")
+    return parts[:2] if len(parts) >= 2 else parts
+
+
+def _merge_small_sections(
+    sections: list[tuple[str, str]], min_chars: int = MIN_SECTION_MERGE_CHARS
+) -> list[tuple[str, str]]:
+    """Склеивает соседние крошечные подсекции одного родительского раздела ##, если их суммарная длина < min_chars."""
+    merged: list[tuple[str, str]] = []
+    for title, body in sections:
+        if merged:
+            prev_title, prev_body = merged[-1]
+            prev_parent = _parent_h2(prev_title)
+            cur_parent = _parent_h2(title)
+            if (
+                len(cur_parent) >= 2
+                and prev_parent == cur_parent
+                and len(prev_body) + len(body) < min_chars
+            ):
+                cur_parts = title.split(" → ")
+                sub_heading = cur_parts[-1] if len(cur_parts) > 2 else ""
+                addon = f"{sub_heading}\n{body}" if sub_heading and not body.startswith(sub_heading) else body
+                new_body = f"{prev_body}\n\n{addon}".strip()
+                if sub_heading and sub_heading not in prev_title:
+                    new_title = f"{prev_title} / {sub_heading}" if len(prev_title.split(" → ")) > 2 else title
+                else:
+                    new_title = prev_title
+                merged[-1] = (new_title, new_body)
+                continue
+        merged.append((title, body))
+    return merged
 
 
 def _sections(text: str, fallback_title: str) -> list[tuple[str, str]]:
     doc, stack = fallback_title, []
     buf: list[str] = []
-    raw_sections: list[tuple[str, list[str], str]] = []
+    out: list[tuple[str, str]] = []
 
     def flush():
         body = "\n".join(buf).strip()
         if body:
-            raw_sections.append((doc, list(stack), body))
+            out.append((" → ".join([doc] + stack), body))
         buf.clear()
 
     for line in text.split("\n"):
-        m4 = SUBHEAD4_RE.match(line)
-        if m4:
-            buf.append(f"{m4.group(1)}:")
-            continue
         m = HEAD_RE.match(line)
         if not m:
-            buf.append(line)
+            buf.append(SUBHEAD4_RE.sub(r"\1", line))
             continue
         flush()
         level, heading = len(m.group(1)), m.group(2)
@@ -153,28 +182,7 @@ def _sections(text: str, fallback_title: str) -> list[tuple[str, str]]:
         else:
             stack = stack[:level - 2] + [heading]
     flush()
-
-    # Склеиваем крошечные соседние подсекции одного родительского раздела ## (суммарно < 700 символов)
-    merged: list[tuple[str, list[str], str]] = []
-    for cur_doc, cur_stack, cur_body in raw_sections:
-        if merged:
-            prev_doc, prev_stack, prev_body = merged[-1]
-            same_parent_h2 = (
-                prev_doc == cur_doc
-                and len(prev_stack) >= 1
-                and len(cur_stack) >= 1
-                and prev_stack[0] == cur_stack[0]
-            )
-            is_tiny = len(prev_body) < TINY_SUBSECTION_CHARS or len(cur_body) < TINY_SUBSECTION_CHARS
-            if same_parent_h2 and is_tiny and (len(prev_body) + len(cur_body) + 40 <= MERGE_SUBSECTION_CHARS):
-                cur_heading = cur_stack[-1] if len(cur_stack) > len(prev_stack) or cur_stack != prev_stack else ""
-                addon = f"{cur_heading}:\n{cur_body}" if cur_heading else cur_body
-                merged_stack = prev_stack if len(prev_stack) >= len(cur_stack) else cur_stack
-                merged[-1] = (prev_doc, merged_stack, f"{prev_body}\n\n{addon}")
-                continue
-        merged.append((cur_doc, cur_stack, cur_body))
-
-    return [(" → ".join([d] + s), b) for d, s, b in merged]
+    return _merge_small_sections(out)
 
 
 def _split_long(body: str, limit: int = MAX_CHUNK_CHARS, sep: str = "\n\n") -> list[str]:
@@ -268,21 +276,29 @@ class KnowledgeBase:
         self.vectors = _unit(vectors)
 
     def search(self, queries: list[str], query_vectors=None, k: int = 28) -> list[Chunk]:
-        """Гибридный поиск: по каждому запросу свой список BM25 (+ векторный с повышенным весом), затем RRF."""
+        """Гибридный поиск: по каждому запросу свой список BM25 (+ векторный с повышенным весом), затем RRF.
+        Последний запрос queries[-1] — фокусный (главный вес), предшествующие — вспомогательные.
+        """
         fused: Counter = Counter()
-        for query in queries:
+        n_queries = len(queries)
+        for idx, query in enumerate(queries):
+            is_focus = idx == n_queries - 1
+            w_bm25 = 1.0 if is_focus else 0.8
             scores = self.bm25.scores(tokenize(query))
             order = [int(i) for i in np.argsort(-scores)[:50] if scores[i] > 0]
             for rank, i in enumerate(order):
-                fused[i] += 1.0 / (60 + rank)  # вес BM25 = 1.0
+                fused[i] += w_bm25 / (60 + rank)
 
         if self.vectors is not None and query_vectors:
-            for vector in query_vectors:
+            n_vecs = len(query_vectors)
+            for idx, vector in enumerate(query_vectors):
                 if vector is None:
                     continue
+                is_focus = idx == n_vecs - 1
+                w_dense = 1.70 if (n_vecs > 1 and is_focus) else (1.35 if n_vecs > 1 else 1.8)
                 sims = self.vectors @ _unit(np.asarray(vector, dtype=np.float32))
                 order = [int(i) for i in np.argsort(-sims)[:50]]
                 for rank, i in enumerate(order):
-                    fused[i] += 1.8 / (60 + rank)  # вес BGE-M3 = 1.8 (приоритет смыслу)
+                    fused[i] += w_dense / (60 + rank)
 
         return [self.chunks[i] for i, _ in fused.most_common(k)]
