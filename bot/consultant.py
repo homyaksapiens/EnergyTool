@@ -22,8 +22,8 @@ ROLE_RE = re.compile(r"^\s*(Пользователь|Клиент|User|Асси�
 ASSISTANT_ROLES = {"ассистент", "консультант", "бот", "assistant"}
 THINK_RE = re.compile(r"<think>.*?</think>", re.S)
 
-# Короткий бюджет токенов для режима think low: хватает на сжатую сверку фактов и ответ без лишних домыслов
-THINK_MAX_TOKENS = max(MAX_TOKENS, 1200)
+# Гарантированный бюджет токенов на 1-й попытке, чтобы глубокое рассуждение <think> не обрывалось
+THINK_MAX_TOKENS = max(MAX_TOKENS, 2500)
 
 SUMMARY_MAX_TOKENS = 192
 SUMMARY_SYSTEM_PROMPT = (
@@ -140,7 +140,8 @@ def search_queries(messages: list[dict]) -> list[str]:
 
 def format_dialog_sandwich(messages: list[dict]) -> list[dict]:
     """Техника «сэндвича» для многоходовых диалогов:
-    фиксирует глобальную задачу клиента, сводку уже известных фактов и напоминает правила SYSTEM_PROMPT в конце.
+    передаёт полный контекст реплик Консультант/Клиент и инструктирует исключать уже названные клиентом параметры
+    как из тела ответа (списка требуемых данных), так и из финального вопроса.
     Для одиночных вопросов возвращает messages без изменений.
     """
     if len(messages) <= 1:
@@ -148,7 +149,6 @@ def format_dialog_sandwich(messages: list[dict]) -> list[dict]:
 
     users = [m["content"].strip() for m in messages if m["role"] == "user" and m["content"].strip()]
     global_goal = users[0] if users else messages[0]["content"].strip()
-    known_facts = " ".join(users)
     last_reply = messages[-1]["content"].strip()
     summary = summarize_dialog(messages)
 
@@ -161,17 +161,15 @@ def format_dialog_sandwich(messages: list[dict]) -> list[dict]:
 
     sandwich_prompt = (
         f"Исходная задача клиента (глобальная тема): {global_goal}\n"
-        f"Все факты, которые клиент уже сообщил о себе и объекте: {known_facts}\n"
         f"{summary_line}\n"
         f"Предыдущие реплики диалога:\n{history_block}\n\n"
         f"Последняя реплика клиента (ответь на неё):\n{last_reply}\n\n"
         f"Напоминание правил ответа: ответь на последнюю реплику клиента с учётом его исходной задачи и всех "
-        f"сообщённых им фактов строго по материалам EnergyTool. Начни с прямого ответа по сути («Да, …», «Нет, …» "
-        f"или сама суть), затем перечисли через запятую все ключевые условия, проверяемые параметры, способы решения "
-        f"и важные оговорки из соответствующего раздела материалов без пропуска деталей и без добавления лишних "
-        f"параметров из других тем. Объём — 2–4 предложения, 30–70 слов, обычный связный текст без списков и "
-        f"markdown. В конце задай один уточняющий вопрос или предложи следующий шаг, но НЕ спрашивай то, что клиент "
-        f"уже сообщил выше."
+        f"сообщённых им в диалоге сведений строго по материалам EnergyTool. Начни с прямого ответа по сути, затем "
+        f"1–2 предложения: от чего зависит результат для ситуации клиента или какие данные понадобятся дальше "
+        f"(исключая из перечисления те параметры и сведения об объекте, которые клиент уже назвал в репликах выше). "
+        f"Объём — 2–4 предложения, 30–70 слов, обычный связный текст без списков и markdown. В конце задай один "
+        f"уточняющий вопрос со знаком «?» для подбора решения, но НЕ спрашивай то, что клиент уже сообщил выше."
     )
     return [{"role": "user", "content": sandwich_prompt}]
 
@@ -220,13 +218,11 @@ class Consultant:
             if attempt == 0:
                 msgs = convo[:-1] + [{**convo[-1], "content": convo[-1]["content"] + " /think"}]
                 tokens_limit = THINK_MAX_TOKENS
-                effort = "low"
             else:  # модель могла уйти в рассуждения и не успеть ответить — просим без них
                 msgs = convo[:-1] + [{**convo[-1], "content": convo[-1]["content"] + " /no_think"}]
                 tokens_limit = MAX_TOKENS
-                effort = None
             try:
-                raw, _ = llm_client.chat(msgs, TEMPERATURE, tokens_limit, reasoning_effort=effort)
+                raw, _ = llm_client.chat(msgs, TEMPERATURE, tokens_limit)
             except (llm_client.ApiError, KeyError, IndexError, TypeError, ValueError) as e:
                 print(f"LLM: {e!r}", file=sys.stderr)
                 break
