@@ -41,8 +41,8 @@ MAX_TOKENS = max(number("MAX_TOKENS", 1024, 128, 8192), 512)
 MAX_WORKERS = number("MAX_WORKERS", 4, 1, 16)
 DATA_DIR = env("DATA_DIR", "data")
 
-CANDIDATES = number("ET_CANDIDATES", 28, 4, 50)  # расширенная воронка для реранкера (Гипотеза 2)
-CONTEXT_CHUNKS = number("ET_CONTEXT_CHUNKS", 7, 1, 15)  # 7 укрупнённых фрагментов без зашумления промпта
+CANDIDATES = number("ET_CANDIDATES", 24, 4, 50)  # 24 кандидата в реранкер
+CONTEXT_CHUNKS = number("ET_CONTEXT_CHUNKS", 8, 1, 15)  # 8 чанков (захватывает «Оборудование и гарантии» с 25 годами в #4)
 USE_DENSE = env("ET_USE_DENSE", "1") == "1"
 USE_RERANK = env("ET_USE_RERANK", "1") == "1"
 TIME_BUDGET = number("ET_TIME_BUDGET", 1020, 60, 3600)  # секунд на весь прогон; лимит платформы — 1200
