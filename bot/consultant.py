@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import sys
+import threading
 import time
 
 import llm_client
@@ -23,6 +24,21 @@ THINK_RE = re.compile(r"<think>.*?</think>", re.S)
 
 # Гарантированный бюджет токенов на 1-й попытке, чтобы глубокое рассуждение <think> не обрывалось
 THINK_MAX_TOKENS = max(MAX_TOKENS, 2500)
+
+SUMMARY_MAX_TOKENS = 192
+SUMMARY_SYSTEM_PROMPT = (
+    "Перепиши последнюю реплику диалога в один самодостаточный поисковый запрос для базы знаний (до 30 слов). "
+    "Правила:\n"
+    "1. Главный фокус — строго на последнем вопросе и последней реплике клиента.\n"
+    "2. Замени местоимения и неполные ссылки («это», «таких данных», «четвёртая», «для оценки») "
+    "на конкретные термины, тип объекта, цифры и условия из предыдущих реплик диалога.\n"
+    "3. ЗАПРЕЩЕНО использовать водные и мета-слова: «клиент», «пользователь», «консультант», «ассистент», "
+    "«спрашивает», «интересуется», «хочет узнать», «просит объяснить», «в диалоге».\n"
+    "4. Не отвечай на вопрос и ничего не додумывай. Выведи только одну строку — готовый запрос без кавычек."
+)
+
+_SUMMARY_CACHE: dict[tuple[tuple[str, str], ...], str] = {}
+_SUMMARY_LOCK = threading.Lock()
 
 
 def parse_dialog(text: str) -> list[dict]:
@@ -43,10 +59,63 @@ def parse_dialog(text: str) -> list[dict]:
     return [m for m in messages if m["content"].strip()] or [{"role": "user", "content": text.strip()}]
 
 
+def clean_answer(text: str) -> str:
+    text = text or ""
+    if "</think>" in text:  # рассуждение могло начаться ещё в шаблоне промпта — берём то, что после него
+        text = text.rsplit("</think>", 1)[1]
+    text = THINK_RE.sub("", text)
+    if "<think>" in text:  # рассуждение оборвалось по лимиту токенов — ответа нет
+        text = text.split("<think>", 1)[0]
+    text = re.sub(r"\*\*|__|`|^#+\s*", "", text, flags=re.M)
+    text = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", text, flags=re.M)
+    return " ".join(text.split())
+
+
+def _dialog_cache_key(messages: list[dict]) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (m.get("role", "user"), m.get("content", "").strip())
+        for m in messages
+        if m.get("content", "").strip()
+    )
+
+
+def summarize_dialog(messages: list[dict]) -> str:
+    """Деконтекстуализация последнего вопроса диалога без водных слов (/no_think, с кэшированием)."""
+    if len(messages) <= 1:
+        return ""
+
+    key = _dialog_cache_key(messages)
+    with _SUMMARY_LOCK:
+        if key in _SUMMARY_CACHE:
+            return _SUMMARY_CACHE[key]
+
+    lines = [
+        f"{'Клиент' if m['role'] == 'user' else 'Консультант'}: {m['content'].strip()}"
+        for m in messages
+        if m["content"].strip()
+    ]
+    dialog_text = "\n".join(lines)
+    convo = [
+        {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+        {"role": "user", "content": f"{dialog_text}\n\nПоисковый запрос по последней реплике: /no_think"},
+    ]
+    summary = ""
+    try:
+        raw, _ = llm_client.chat(convo, temperature=0.0, max_tokens=SUMMARY_MAX_TOKENS)
+        summary = clean_answer(raw).strip("«»\"'")
+    except Exception as e:  # noqa: BLE001 — при любой ошибке работаем по базовым запросам без падения
+        print(f"Суммаризатор диалога недоступен: {e!r}", file=sys.stderr)
+        summary = ""
+
+    with _SUMMARY_LOCK:
+        _SUMMARY_CACHE[key] = summary
+    return summary
+
+
 def search_queries(messages: list[dict]) -> list[str]:
     """Формирует поисковые запросы без размытия весов токенов:
     - Одиночный вопрос: [last]
-    - Диалог: [глобальная_проблема (1-я реплика), текущий_обмен (вопрос бота + ответ клиента), весь_диалог]
+    - Диалог: [глобальная_проблема, текущий_обмен, весь_диалог, сфокусированный_запрос_без_воды (для реранкера)]
     """
     users = [m["content"].strip() for m in messages if m["role"] == "user" and m["content"].strip()]
     last = users[-1] if users else ""
@@ -60,8 +129,10 @@ def search_queries(messages: list[dict]) -> list[str]:
     else:
         last_exchange = last
 
+    summary = summarize_dialog(messages)
+
     queries: list[str] = []
-    for q in (global_problem, last_exchange, full):
+    for q in (global_problem, last_exchange, full, summary):
         if q and q not in queries:
             queries.append(q)
     return queries
@@ -79,16 +150,19 @@ def format_dialog_sandwich(messages: list[dict]) -> list[dict]:
     global_goal = users[0] if users else messages[0]["content"].strip()
     known_facts = " ".join(users)
     last_reply = messages[-1]["content"].strip()
+    summary = summarize_dialog(messages)
 
     history_lines = [
         f"{'Клиент' if m['role'] == 'user' else 'Консультант'}: {m['content'].strip()}"
         for m in messages[:-1]
     ]
     history_block = "\n".join(history_lines)
+    summary_line = f"Суть текущего вопроса с учётом контекста: {summary}\n" if summary else ""
 
     sandwich_prompt = (
         f"Исходная задача клиента (глобальная тема): {global_goal}\n"
-        f"Все факты, которые клиент уже сообщил о себе и объекте: {known_facts}\n\n"
+        f"Все факты, которые клиент уже сообщил о себе и объекте: {known_facts}\n"
+        f"{summary_line}\n"
         f"Предыдущие реплики диалога:\n{history_block}\n\n"
         f"Последняя реплика клиента (ответь на неё):\n{last_reply}\n\n"
         f"Напоминание правил ответа: ответь на последнюю реплику клиента с учётом его исходной задачи и всех "
@@ -98,18 +172,6 @@ def format_dialog_sandwich(messages: list[dict]) -> list[dict]:
         f"уточняющий вопрос для подбора решения, но НЕ спрашивай то, что клиент уже сообщил выше."
     )
     return [{"role": "user", "content": sandwich_prompt}]
-
-
-def clean_answer(text: str) -> str:
-    text = text or ""
-    if "</think>" in text:  # рассуждение могло начаться ещё в шаблоне промпта — берём то, что после него
-        text = text.rsplit("</think>", 1)[1]
-    text = THINK_RE.sub("", text)
-    if "<think>" in text:  # рассуждение оборвалось по лимиту токенов — ответа нет
-        text = text.split("<think>", 1)[0]
-    text = re.sub(r"\*\*|__|`|^#+\s*", "", text, flags=re.M)
-    text = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", text, flags=re.M)
-    return " ".join(text.split())
 
 
 class Consultant:
