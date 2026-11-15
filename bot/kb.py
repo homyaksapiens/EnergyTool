@@ -119,21 +119,28 @@ def normalize(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-HEAD_RE = re.compile(r"^(#{1,4})\s+(.*\S)\s*$")
+MIN_SECTION_CHARS = 700  # порог для склейки мелких соседних подсекций одного раздела ##
+HEAD_RE = re.compile(r"^(#{1,3})\s+(.*\S)\s*$")  # режем только по крупным заголовкам #{1,3}, не дробя ####
+SUBHEAD_4_RE = re.compile(r"^#{4,}\s+(.*\S)\s*$")
 
 
 def _sections(text: str, fallback_title: str) -> list[tuple[str, str]]:
     doc, stack = fallback_title, []
     buf: list[str] = []
-    out = []
+    raw_sections: list[tuple[str, list[str], str]] = []
 
     def flush():
         body = "\n".join(buf).strip()
         if body:
-            out.append((" → ".join([doc] + stack), body))
+            raw_sections.append((doc, list(stack), body))
         buf.clear()
 
     for line in text.split("\n"):
+        # Заголовки #### оставляем внутри тела чанка как текстовую метку, не разрывая чанк
+        m4 = SUBHEAD_4_RE.match(line)
+        if m4:
+            buf.append(f"{m4.group(1)}:")
+            continue
         m = HEAD_RE.match(line)
         if not m:
             buf.append(line)
@@ -145,7 +152,44 @@ def _sections(text: str, fallback_title: str) -> list[tuple[str, str]]:
         else:
             stack = stack[:level - 2] + [heading]
     flush()
-    return out
+
+    # Укрупнение (Гипотеза 2): склеиваем соседние крошечные подсекции (###) одного родительского раздела (##),
+    # но сохраняем подзаголовок каждой подсекции внутри текста, чтобы LLM не смешивала условия разных пунктов
+    merged: list[tuple[str, str]] = []
+    i = 0
+    while i < len(raw_sections):
+        cur_doc, cur_stack, cur_body = raw_sections[i]
+        if len(cur_stack) >= 2 and len(cur_body) < MIN_SECTION_CHARS:
+            parent = cur_stack[:-1]
+            leaf_titles = [cur_stack[-1]]
+            bodies = [f"{cur_stack[-1]}:\n{cur_body}"]
+            total_len = len(cur_body)
+            j = i + 1
+            while j < len(raw_sections):
+                nxt_doc, nxt_stack, nxt_body = raw_sections[j]
+                if (
+                    nxt_doc == cur_doc
+                    and len(nxt_stack) >= 2
+                    and nxt_stack[:-1] == parent
+                    and total_len + len(nxt_body) <= MIN_SECTION_CHARS
+                ):
+                    leaf_titles.append(nxt_stack[-1])
+                    bodies.append(f"{nxt_stack[-1]}:\n{nxt_body}")
+                    total_len += len(nxt_body)
+                    j += 1
+                else:
+                    break
+            if len(leaf_titles) > 1:
+                combined_title = " → ".join([cur_doc] + parent + [" / ".join(leaf_titles)])
+                merged.append((combined_title, "\n\n".join(bodies)))
+                i = j
+                continue
+
+        full_title = " → ".join([cur_doc] + cur_stack)
+        merged.append((full_title, cur_body))
+        i += 1
+
+    return merged
 
 
 def _split_long(body: str, limit: int = MAX_CHUNK_CHARS, sep: str = "\n\n") -> list[str]:

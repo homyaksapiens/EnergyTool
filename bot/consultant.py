@@ -37,25 +37,8 @@ SUMMARY_SYSTEM_PROMPT = (
     "4. Не отвечай на вопрос и ничего не додумывай. Выведи только одну строку — готовый запрос без кавычек."
 )
 
-EXPAND_MAX_TOKENS = 128
-EXPAND_SYSTEM_PROMPT = (
-    "Сформулируй дополнительные поисковые термины и синонимы к вопросу клиента для поиска по базе знаний "
-    "энергосервиса МТС EnergyTool (до 20 слов). "
-    "Правила:\n"
-    "1. Переведи бытовые формулировки в профильные понятия базы знаний (солнечные электростанции СЭС, "
-    "требования к кровле и крыше, несущая способность и замена покрытия, реактивная мощность и энергия, "
-    "коммерческие и технические потери, оптовый рынок ОРЭМ, ценовые категории, почасовой учёт и АИИС КУЭ, "
-    "распознавание показаний счётчиков по фото, облачная платформа учёта).\n"
-    "2. ЗАПРЕЩЕНО использовать водные и мета-слова: «клиент», «пользователь», «консультант», «ассистент», "
-    "«спрашивает», «интересуется», «хочет узнать», «просит объяснить».\n"
-    "3. Не отвечай на вопрос и ничего не додумывай. Выведи только одну строку — ключевые слова и термины без кавычек."
-)
-
 _SUMMARY_CACHE: dict[tuple[tuple[str, str], ...], str] = {}
 _SUMMARY_LOCK = threading.Lock()
-
-_EXPAND_CACHE: dict[str, str] = {}
-_EXPAND_LOCK = threading.Lock()
 
 
 def parse_dialog(text: str) -> list[dict]:
@@ -129,47 +112,15 @@ def summarize_dialog(messages: list[dict]) -> str:
     return summary
 
 
-def expand_query(question: str) -> str:
-    """Расширение короткого одиночного вопроса терминами предметной области (/no_think, с кэшированием)."""
-    q = question.strip()
-    if not q:
-        return ""
-
-    with _EXPAND_LOCK:
-        if q in _EXPAND_CACHE:
-            return _EXPAND_CACHE[q]
-
-    convo = [
-        {"role": "system", "content": EXPAND_SYSTEM_PROMPT},
-        {"role": "user", "content": f"Вопрос: {q}\n\nКлючевые термины для поиска: /no_think"},
-    ]
-    expanded = ""
-    try:
-        raw, _ = llm_client.chat(convo, temperature=0.0, max_tokens=EXPAND_MAX_TOKENS)
-        expanded = clean_answer(raw).strip("«»\"'")
-    except Exception as e:  # noqa: BLE001 — при любой ошибке работаем по исходному запросу без падения
-        print(f"Расширение запроса недоступно: {e!r}", file=sys.stderr)
-        expanded = ""
-
-    with _EXPAND_LOCK:
-        _EXPAND_CACHE[q] = expanded
-    return expanded
-
-
 def search_queries(messages: list[dict]) -> list[str]:
     """Формирует поисковые запросы без размытия весов токенов:
-    - Одиночный вопрос: [f"{last} {expanded}", last] (queries[-1] остаётся чистым вопросом клиента last)
+    - Одиночный вопрос: [last]
     - Диалог: [глобальная_проблема, текущий_обмен, весь_диалог, сфокусированный_запрос_без_воды (для реранкера)]
     """
     users = [m["content"].strip() for m in messages if m["role"] == "user" and m["content"].strip()]
     last = users[-1] if users else ""
     full = " ".join(m["content"].strip() for m in messages if m["content"].strip())
     if full == last or len(messages) <= 1:
-        if not last:
-            return []
-        expanded = expand_query(last)
-        if expanded and expanded.lower() != last.lower():
-            return [f"{last} {expanded}".strip(), last]
         return [last]
 
     global_problem = users[0] if users else last
@@ -189,15 +140,17 @@ def search_queries(messages: list[dict]) -> list[str]:
 
 def format_dialog_sandwich(messages: list[dict]) -> list[dict]:
     """Техника «сэндвича» для многоходовых диалогов:
-    фиксирует глобальную задачу клиента, сводку уже известных фактов и напоминает правила SYSTEM_PROMPT в конце.
-    Для одиночных вопросов возвращает messages без изменений.
+    фиксирует глобальную задачу клиента, сводку уже известных фактов, список уже заданных вопросов
+    и напоминает правила SYSTEM_PROMPT в конце. Для одиночных вопросов возвращает messages без изменений.
     """
     if len(messages) <= 1:
         return messages
 
     users = [m["content"].strip() for m in messages if m["role"] == "user" and m["content"].strip()]
+    assistants = [m["content"].strip() for m in messages[:-1] if m["role"] == "assistant" and m["content"].strip()]
     global_goal = users[0] if users else messages[0]["content"].strip()
     known_facts = " ".join(users)
+    already_asked = " | ".join(assistants)
     last_reply = messages[-1]["content"].strip()
     summary = summarize_dialog(messages)
 
@@ -207,18 +160,22 @@ def format_dialog_sandwich(messages: list[dict]) -> list[dict]:
     ]
     history_block = "\n".join(history_lines)
     summary_line = f"Суть текущего вопроса с учётом контекста: {summary}\n" if summary else ""
+    asked_line = f"Вопросы, которые консультант УЖЕ задавал (не повторяй их): {already_asked}\n" if already_asked else ""
 
     sandwich_prompt = (
         f"Исходная задача клиента (глобальная тема): {global_goal}\n"
         f"Все факты, которые клиент уже сообщил о себе и объекте: {known_facts}\n"
+        f"{asked_line}"
         f"{summary_line}\n"
         f"Предыдущие реплики диалога:\n{history_block}\n\n"
         f"Последняя реплика клиента (ответь на неё):\n{last_reply}\n\n"
-        f"Напоминание правил ответа: ответь на последнюю реплику клиента с учётом его исходной задачи и всех "
-        f"сообщённых им фактов строго по материалам EnergyTool. Начни с прямого ответа по сути («Да, …», «Нет, …» "
-        f"или сама суть), затем 1–2 предложения: от чего зависит результат для ситуации клиента или важная оговорка. "
+        f"Напоминание правил ответа: ответь на последнюю реплику клиента строго по материалам EnergyTool. "
+        f"Начни с прямого ответа по сути («Да, …», «Нет, …» или сама суть) и в первом-втором предложении явно "
+        f"привяжи ответ к типу объекта и уже известным условиям клиента из истории диалога (если клиент назвал "
+        f"количество словами, например «три склада» или «около сорока», пиши его тоже словами, не заменяя на цифры, "
+        f"которых нет в материалах). Затем за 1–2 предложения укажи ключевые условия и оговорки из материалов. "
         f"Объём — 2–4 предложения, 30–70 слов, обычный связный текст без списков и markdown. В конце задай один "
-        f"уточняющий вопрос для подбора решения, но НЕ спрашивай то, что клиент уже сообщил выше."
+        f"новый уточняющий вопрос для следующего шага, но НЕ спрашивай то, что клиент уже сообщил или что консультант уже спрашивал."
     )
     return [{"role": "user", "content": sandwich_prompt}]
 
