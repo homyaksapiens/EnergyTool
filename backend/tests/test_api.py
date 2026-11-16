@@ -1,4 +1,4 @@
-"""Проверка HTTP API по CONTRACTS.md, раздел 4. Модель и база знаний подменены, сеть не нужна.
+"""Проверка HTTP API с тестовой базой знаний и подменой модели.
 
 Запуск из папки backend/:  ..\\.venv\\Scripts\\python -m unittest discover tests -v
 Все персональные данные в тестах выдуманы.
@@ -16,10 +16,9 @@ TMP = tempfile.TemporaryDirectory()
 ROOT = Path(TMP.name)
 (ROOT / "kb").mkdir()
 (ROOT / "kb" / "test.md").write_text("# Тестовая база\n\n## Раздел\n\nВыдуманный текст для проверки поиска.\n", encoding="utf-8")
-(ROOT / "frontend" / "js").mkdir(parents=True)
+(ROOT / "frontend").mkdir()
 (ROOT / "frontend" / "index.html").write_text("<!doctype html><title>сайт</title>", encoding="utf-8")
 (ROOT / "frontend" / "manager.html").write_text("<!doctype html><title>менеджер</title>", encoding="utf-8")
-(ROOT / "frontend" / "js" / "mock.js").write_text("const MockServer = {};", encoding="utf-8")
 os.environ.update({
     "KB_PATH": str(ROOT / "kb"), "DB_PATH": str(ROOT / "test.db"), "FRONTEND_DIR": str(ROOT / "frontend"),
     "LLM_BASE_URL": "", "OPENAI_BASE_URL": "", "ET_USE_DENSE": "0", "DEMO_AUTH": "0",
@@ -475,9 +474,7 @@ class ApiTest(unittest.TestCase):
 
     def test_frontend_is_served_without_mock(self):
         self.assertIn("сайт", self.client.get("/").text)
-        mock_js = self.client.get("/js/mock.js")
-        self.assertEqual(mock_js.status_code, 200)
-        self.assertNotIn("MockServer", mock_js.text)
+        self.assertEqual(self.client.get("/js/mock.js").status_code, 404)
 
 
 if __name__ == "__main__":

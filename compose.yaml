@@ -1,0 +1,22 @@
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      KB_PATH: /inputs/knowledge-base.zip
+      DB_PATH: /var/lib/energytool/app.db
+      FRONTEND_DIR: /app/frontend
+      PORT: '8000'
+    ports:
+      - '127.0.0.1:${PORT:-8000}:8000'
+    volumes:
+      - type: bind
+        source: ./data/knowledge-base.zip
+        target: /inputs/knowledge-base.zip
+        read_only: true
+        bind:
+          create_host_path: false
+      - app-data:/var/lib/energytool
+
+volumes:
+  app-data:

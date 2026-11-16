@@ -1,4 +1,4 @@
-"""Настройки бэкенда из переменных окружения (CONTRACTS.md, раздел 6).
+"""Настройки бэкенда из переменных окружения.
 
 Этот модуль импортируется первым: он читает .env до того, как загрузится ядро из bot/ —
 ядро берёт адрес модели и свои настройки из окружения в момент импорта.
@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT / ".env")
 
-# Ядро консультанта — плоские модули в bot/ (CONTRACTS.md, раздел 2)
+# Ядро консультанта — плоские модули в bot/.
 BOT_DIR = ROOT / "bot"
 if str(BOT_DIR) not in sys.path:
     sys.path.insert(0, str(BOT_DIR))

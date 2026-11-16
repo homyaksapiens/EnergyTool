@@ -1,0 +1,12 @@
+# В контекст сборки входит только код, который копирует Dockerfile.
+**
+!backend/
+!backend/app/
+!backend/app/**
+!backend/requirements.txt
+!bot/
+!bot/*.py
+!frontend/
+!frontend/**
+**/__pycache__/
+frontend/fonts/local-arial/

@@ -1,4 +1,4 @@
-"""HTTP API бэкенда и раздача фронтенда. Пути и поля — CONTRACTS.md, раздел 4.
+"""HTTP API бэкенда и раздача фронтенда.
 
 Запуск из папки backend/:  uvicorn app.main:app --port 8000
 """
@@ -33,7 +33,7 @@ MODEL_DOWN = "Модель сейчас не отвечает. Попробуй�
 # ---------- старт сервера ----------
 
 def _purge_daily() -> None:
-    """Раз в сутки удаляет сессии старше срока хранения (CONTRACTS.md, раздел 5)."""
+    """Раз в сутки удаляет сессии старше срока хранения."""
     while True:
         time.sleep(24 * 3600)
         try:
@@ -106,9 +106,8 @@ async def server_error(request: Request, exc: Exception):
 def current_phone(request: Request) -> str | None:
     """Номер вошедшего клиента или None для гостя.
 
-    Единственное место, которое знает, как бэкенд узнаёт клиента. Сейчас входа нет (жюри в Docker — гость);
-    DEMO_CLIENT_PHONE включает показ «Ваших диалогов». При интеграции с сайтом здесь появится
-    чтение cookie или токена (CONTRACTS.md, раздел 8).
+    В деморежиме номер выдаётся из профиля тестового аккаунта.
+    DEMO_CLIENT_PHONE задаёт общий тестовый номер в гостевом режиме.
     """
     user = auth.account(request)
     return user["phone"] if user else (None if config.DEMO_AUTH else config.DEMO_CLIENT_PHONE or None)
@@ -410,16 +409,6 @@ def health():
 
 
 # ---------- фронтенд ----------
-
-@app.get("/js/mock.js", include_in_schema=False)
-def no_mock():
-    """Вместо заглушки API отдаём пустой скрипт: api.js не находит MockServer и ходит в настоящий бэкенд.
-
-    Сам файл frontend/js/mock.js остаётся для работы над интерфейсом без бэкенда.
-    """
-    return Response("/* заглушка отключена: страницу раздаёт бэкенд */\n",
-                    media_type="application/javascript", headers={"Cache-Control": "no-store"})
-
 
 @app.get("/manager", include_in_schema=False)
 @app.get("/manager.html", include_in_schema=False)

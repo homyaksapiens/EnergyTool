@@ -1,35 +1,13 @@
 .env
-# Установленные шрифты Windows — только для локального просмотра, не публиковать.
-/frontend/fonts/local-arial/
+.env.*
+!.env.example
 .venv/
 __pycache__/
+.pytest_cache/
+.claude/
+.impeccable/
+/frontend/fonts/local-arial/
 /data/
-dist/
-runs/
-# материалы организаторов — публиковать запрещено
-данные/
-
-# служебные файлы скила Impeccable (по правилам его авторов)
-.impeccable/live/server.json
-.impeccable/live/codex-worker.json
-.impeccable/live/codex-worker.log
-**/.impeccable/hook.cache.json
-**/.impeccable/hook.pending.json
-.impeccable/live/sessions/
-.impeccable/live/previews/
-.impeccable/live/annotations/
-.impeccable/live/artifacts/
-.impeccable/live/accept-receipts/
-.impeccable/live/locks/
-.impeccable/live/cache/
-.impeccable/live/benchmarks/
-.impeccable/live/manual-edit-apply-transaction.json
-.impeccable/live/manual-edit-events.jsonl
-.impeccable/live/manual-edit-evidence/
-.impeccable/live/pending-manual-edits.json
-.impeccable/live/deferred-svelte-component-accepts.json
-.impeccable/history/
-.impeccable/config.local.json
-.impeccable/provider-smoke/
-# скриншоты проверок дизайна (пересоздаются при каждой проверке)
-.impeccable/review/
+/данные/
+/dist/
+/runs/

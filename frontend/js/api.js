@@ -1,7 +1,4 @@
-/* api.js — все запросы фронта к бэкенду в одном месте. Пути и поля — CONTRACTS.md, раздел 4.
-
-   Пока бэкенд не готов, запросы уходят в заглушку (mock.js).
-   Включить настоящий бэкенд: поставить USE_MOCK = false или открыть страницу с ?mock=0. */
+/* api.js — запросы фронтенда к HTTP API приложения. */
 
 // Ошибка API: код ответа и текст для человека из поля "detail"
 class ApiError extends Error {
@@ -12,13 +9,8 @@ class ApiError extends Error {
 }
 
 const Api = (() => {
-  const params = new URLSearchParams(location.search);
-  const USE_MOCK = params.get("mock") !== "0" && typeof MockServer !== "undefined";
-
   // timeoutMs — сколько ждать ответа. Без предела зависший ответ модели держал бы чат «занятым» до перезагрузки
   async function request(method, path, body, timeoutMs = 30000) {
-    if (USE_MOCK) return MockServer.handle(method, path, body);
-
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), timeoutMs);
     let res;
@@ -49,7 +41,6 @@ const Api = (() => {
   }
 
   return {
-    isMock: USE_MOCK,
     accounts: () => request("GET", "/api/auth/accounts"),
     login: (accountId) => request("POST", "/api/auth/login", { account_id: accountId }),
     logout: () => request("POST", "/api/auth/logout"),

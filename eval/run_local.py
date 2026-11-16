@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "данные"
+DATA = ROOT / "data"
 
 
 def detect_models(base_url: str, key: str) -> tuple[str | None, str | None]:

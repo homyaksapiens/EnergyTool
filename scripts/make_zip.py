@@ -1,4 +1,4 @@
-"""Сборка ZIP для автосабмита из bot/ с проверками по регламенту (техчать.md, раздел 4).
+"""Сборка ZIP для автосабмита из bot/ с проверками по регламенту организаторов.
 
     .venv\\Scripts\\python scripts\\make_zip.py   →  dist/submission.zip
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BOT = ROOT / "bot"
-ALLOWED = ROOT / "данные" / "requirements.txt"
+ALLOWED = ROOT / "data" / "requirements.txt"
 OUT = ROOT / "dist" / "submission.zip"
 SECRET_RE = re.compile(r"sk-[A-Za-z0-9_-]{16,}|Bearer\s+[A-Za-z0-9._-]{20,}")
 
@@ -52,7 +52,7 @@ def main() -> None:
             elif version and allowed[name] != version:
                 errors.append(f"requirements.txt: {name}=={version}, а разрешена версия {allowed[name]}")
     else:
-        print("Внимание: нет данные/requirements.txt — список разрешённых пакетов не проверен")
+        print("Внимание: нет data/requirements.txt — список разрешённых пакетов не проверен")
 
     if errors:
         print("Сборка остановлена:\n  " + "\n  ".join(errors))
