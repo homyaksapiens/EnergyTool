@@ -1,4 +1,6 @@
 .env
+# Установленные шрифты Windows — только для локального просмотра, не публиковать.
+/frontend/fonts/local-arial/
 .venv/
 __pycache__/
 /data/
