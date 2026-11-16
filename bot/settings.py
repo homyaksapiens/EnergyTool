@@ -43,8 +43,6 @@ DATA_DIR = env("DATA_DIR", "data")
 
 CANDIDATES = number("ET_CANDIDATES", 16, 4, 50)  # сколько фрагментов отдаём реранкеру
 CONTEXT_CHUNKS = number("ET_CONTEXT_CHUNKS", 6, 1, 15)  # сколько фрагментов попадает в промпт
-MIN_CONTEXT_CHUNKS = number("ET_MIN_CONTEXT_CHUNKS", 3, 1, 15)  # гарантированный минимум чанков после фильтра хвоста
-RERANK_MIN_SCORE = number("ET_RERANK_MIN_SCORE", 0.05, 0.0, 1.0, float)  # порог отсечения нерелевантного хвоста Top-6
 USE_DENSE = env("ET_USE_DENSE", "1") == "1"
 USE_RERANK = env("ET_USE_RERANK", "1") == "1"
 TIME_BUDGET = number("ET_TIME_BUDGET", 1020, 60, 3600)  # секунд на весь прогон; лимит платформы — 1200

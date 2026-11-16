@@ -78,14 +78,8 @@ def embed(texts: list[str], batch: int = 32) -> list[list[float]]:
     return vectors
 
 
-def rerank(
-    query: str,
-    documents: list[str],
-    top_n: int,
-    min_score: float = 0.0,
-    min_k: int = 1,
-) -> list[int]:
-    """Индексы документов по убыванию релевантности с безопасным отсечением нерелевантного хвоста."""
+def rerank(query: str, documents: list[str], top_n: int) -> list[int]:
+    """Индексы документов по убыванию релевантности."""
     data = post("/rerank", RERANK_API_KEY, {
         "model": RERANKER_MODEL,
         "query": query,
@@ -93,18 +87,6 @@ def rerank(
         "top_n": top_n,
     }, attempts=2)
     items = data.get("results") or data.get("data") or []
-    scored: list[tuple[int, float]] = []
-    for item in items:
-        idx = int(item.get("index", -1))
-        if 0 <= idx < len(documents):
-            score = float(item.get("relevance_score", item.get("score", 0.0)))
-            scored.append((idx, score))
-    scored.sort(key=lambda x: -x[1])
-    scored = scored[:top_n]
-    # Если реранкер возвращает скоры в положительной шкале и хвост ниже порога, отсекаем только хвост после min_k
-    if min_score > 0.0 and len(scored) > min_k and scored[0][1] >= min_score:
-        head = [idx for idx, _ in scored[:min_k]]
-        tail = [idx for idx, score in scored[min_k:] if score >= min_score]
-        return head + tail
-    return [idx for idx, _ in scored]
+    items = sorted(items, key=lambda item: -float(item.get("relevance_score", item.get("score", 0))))
+    return [int(item["index"]) for item in items if 0 <= int(item["index"]) < len(documents)]
 
