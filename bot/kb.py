@@ -1,7 +1,11 @@
 """База знаний: загрузка из zip, разбор pandoc-таблиц, нарезка по заголовкам, гибридный поиск.
 
 Поиск — BM25 (всегда) + эмбеддинги bge-m3 (если эмбеддер доступен), списки объединяются через RRF.
+
+Распаковывает архив knowledge-base.zip, превращает таблицы в удобный текст, режет файлы по заголовкам ## на кусочки (чанки)
+и ищет по ним двумя способами: по ключевым словам (BM25) и по смыслу через эмбеддинги (bge-m3).
 """
+
 from __future__ import annotations
 
 import math
@@ -13,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-MAX_CHUNK_CHARS = 1800
+MAX_CHUNK_CHARS = 1950
 
 
 @dataclass
@@ -108,9 +112,11 @@ def normalize_tables(text: str) -> str:
 
 
 def normalize(text: str) -> str:
+    text = text.replace("\u00a0", " ").replace("—", "-").replace("–", "-")
     text = normalize_tables(text)
-    text = text.replace("---", "—").replace("--", "–").replace("**", "")
-    return re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"\\+(#{1,4}\s+)", r"\n\1", text)
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.split("\n")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
 HEAD_RE = re.compile(r"^(#{1,4})\s+(.*\S)\s*$")
@@ -178,10 +184,11 @@ def stem(word: str) -> str:
     """Грубый стемминг для русского: срезаем окончание и ограничиваем длину основы."""
     if len(word) <= 4 or word.isdigit():
         return word
+    limit = 11 if word.startswith(("электро", "энерго")) else 7
     for suffix in SUFFIXES:
         if word.endswith(suffix) and len(word) - len(suffix) >= 4:
-            return word[:-len(suffix)][:7]
-    return word[:7]
+            return word[:-len(suffix)][:limit]
+    return word[:limit]
 
 
 def tokenize(text: str) -> list[str]:
@@ -232,19 +239,21 @@ class KnowledgeBase:
         self.vectors = _unit(vectors)
 
     def search(self, queries: list[str], query_vectors=None, k: int = 16) -> list[Chunk]:
-        """Гибридный поиск: по каждому запросу свой список BM25 (+ векторный), затем RRF."""
-        ranked: list[list[int]] = []
+        """Гибридный поиск: по каждому запросу свой список BM25 (+ векторный с повышенным весом), затем RRF."""
+        fused: Counter = Counter()
         for query in queries:
             scores = self.bm25.scores(tokenize(query))
-            ranked.append([int(i) for i in np.argsort(-scores)[:50] if scores[i] > 0])
+            order = [int(i) for i in np.argsort(-scores)[:50] if scores[i] > 0]
+            for rank, i in enumerate(order):
+                fused[i] += 1.0 / (60 + rank)  # вес BM25 = 1.0
+
         if self.vectors is not None and query_vectors:
             for vector in query_vectors:
                 if vector is None:
                     continue
                 sims = self.vectors @ _unit(np.asarray(vector, dtype=np.float32))
-                ranked.append([int(i) for i in np.argsort(-sims)[:50]])
-        fused: Counter = Counter()
-        for order in ranked:
-            for rank, i in enumerate(order):
-                fused[i] += 1.0 / (60 + rank)
+                order = [int(i) for i in np.argsort(-sims)[:50]]
+                for rank, i in enumerate(order):
+                    fused[i] += 1.8 / (60 + rank)  # вес BGE-M3 = 1.8 (приоритет смыслу)
+
         return [self.chunks[i] for i, _ in fused.most_common(k)]

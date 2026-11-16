@@ -2,7 +2,11 @@
 
 Файл с запасными ответами пишется сразу и обновляется по ходу работы, чтобы сбой или тайм-аут
 не оставили платформу без submission.csv.
+
+Главный файл для отправки на платформу хакатона. Он читает тестовые вопросы, прогоняет их через Consultant
+и сохраняет ответы в таблицу submission.csv.
 """
+
 from __future__ import annotations
 
 import time
@@ -57,12 +61,17 @@ def embed_queries(kb: KnowledgeBase, ids: list[str], dialogs: dict) -> dict:
         return {}
     try:
         kb.enable_dense(llm_client.embed)
-        texts = sorted({q for qid in ids for q in search_queries(dialogs[qid]) if q.strip()})
-        vectors = dict(zip(texts, llm_client.embed(texts)))
-        return {qid: [vectors.get(q) for q in search_queries(dialogs[qid])] for qid in ids}
     except Exception as e:  # noqa: BLE001 — без эмбеддингов работаем дальше на BM25
         kb.vectors = None
-        log(f"Эмбеддинги недоступны ({type(e).__name__}: {e}); поиск только BM25")
+        log(f"Эмбеддинги базы недоступны ({type(e).__name__}: {e}); поиск только BM25")
+        return {}
+
+    try:
+        texts = sorted({q[:2000] for qid in ids for q in search_queries(dialogs[qid]) if q.strip()})
+        vectors = dict(zip(texts, llm_client.embed(texts))) if texts else {}
+        return {qid: [vectors.get(q[:2000]) for q in search_queries(dialogs[qid])] for qid in ids}
+    except Exception as e:  # noqa: BLE001 — kb.vectors сохраняем, kb.search досчитает поштучно при необходимости
+        log(f"Пакетный эмбеддинг запросов не удался ({type(e).__name__}: {e}); считаем на лету")
         return {}
 
 
