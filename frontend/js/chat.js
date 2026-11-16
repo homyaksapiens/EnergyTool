@@ -6,7 +6,7 @@
    - режим проверки (для жюри, страница открыта с ?debug=1): под ответом время и документы базы знаний;
    - ошибки: «Повторить» без дубля вопроса, потерянная сессия → новый диалог без потери вопроса;
    - заявка прямо в чате: предложение по offer_lead или по кнопке, форма, подтверждение;
-   - «Новый диалог» с возможностью вернуть прошлый разговор;
+   - сброс контекста при закрытии чата и по кнопке «Новый диалог»;
    - слева «Ваши диалоги»: прошлые диалоги вошедшего клиента (GET /api/me/sessions), любой можно открыть и продолжить;
    - справа оглавление: вопросы клиента в этом разговоре, по клику — прокрутка к вопросу.
 
@@ -42,7 +42,7 @@ const Chat = (() => {
   };
 
   // ---------- Состояние ----------
-  const SESSION_KEY = "et-session-id"; // id сессии живёт до закрытия вкладки
+  const SESSION_KEY = "et-session-id"; // сессию можно восстановить после обновления страницы
 
   // Режим проверки виден только по ссылке с ?debug=1 — клиентам он не нужен
   const DEBUG_ALLOWED = new URLSearchParams(location.search).has("debug");
@@ -50,7 +50,7 @@ const Chat = (() => {
   const state = {
     sessionId: sessionStorage.getItem(SESSION_KEY),
     busy: false,        // ждём ответ — вторую реплику не отправляем
-    epoch: 0,           // растёт при «Новом диалоге»: ответы старого диалога выбрасываем
+    epoch: 0,           // смена диалога отделяет ответы, которые ещё готовятся
     started: false,     // приветствие уже показано
     leadId: null,       // заявка отправлена — её номер
     leadDeclined: false,// клиент отказался от заявки — больше не предлагаем сами
@@ -103,22 +103,32 @@ const Chat = (() => {
     el.root.hidden = false;
     document.body.classList.add("chat-open");
     setPageInert(true);
-    requestAnimationFrame(() => requestAnimationFrame(() => el.root.classList.add("is-open")));
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (document.body.classList.contains("chat-open")) el.root.classList.add("is-open");
+    }));
 
-    if (!state.started) await start(intent);
+    const epoch = state.epoch;
+    if (!state.started) await start(intent, epoch);
     else if (intent === "lead") showLeadForm();
 
+    if (epoch !== state.epoch) return;
     if (ask) send(ask);
     else if (!el.feed.querySelector(".lead-card")) el.input.focus({ preventScroll: true });
   }
 
   function close() {
     closeDrawer();
+    const wasOpen = el.root.classList.contains("is-open");
     el.root.classList.remove("is-open");
     document.body.classList.remove("chat-open");
     setPageInert(false);
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) el.root.hidden = true;
+    if (!wasOpen || matchMedia("(prefers-reduced-motion: reduce)").matches) el.root.hidden = true;
     // Иначе спрячем, когда закончится анимация самого чата (обработчик transitionend ниже)
+    state.started = false;
+    state.undo = null;
+    resetConversation();
+    rebuildOutline();
+    renderDialogs();
     if (state.opener && state.opener.focus) state.opener.focus();
   }
 
@@ -130,10 +140,14 @@ const Chat = (() => {
   }
 
   // Первое открытие: продолжить сессию из этой вкладки или поздороваться
-  async function start(intent) {
+  async function start(intent, epoch) {
     state.started = true;
-    state.profile = await loadProfile();
-    if (state.sessionId && (await restore(state.sessionId))) {
+    const profile = await loadProfile();
+    if (epoch !== state.epoch) return;
+    state.profile = profile;
+    const restored = state.sessionId && (await restore(state.sessionId));
+    if (epoch !== state.epoch) return;
+    if (restored) {
       if (intent === "lead") showLeadForm();
     } else {
       setSession(null);
@@ -201,6 +215,17 @@ const Chat = (() => {
     else sessionStorage.removeItem(SESSION_KEY);
   }
 
+  function resetConversation() {
+    state.epoch++; // ответы и история прежней сессии могут ещё загружаться
+    el.feed.replaceChildren();
+    setSession(null); // сервер создаст сессию при первом вопросе или заявке
+    state.leadId = null;
+    state.leadDeclined = false;
+    el.input.value = "";
+    setBusy(false);
+    autosize();
+  }
+
   // ---------- «Новый диалог» и возврат прошлого ----------
 
   function newDialog() {
@@ -220,14 +245,7 @@ const Chat = (() => {
       busy: state.busy,
     } : null;
 
-    state.epoch++; // ответ старого диалога, если он ещё в пути, в новый не попадёт
-    setBusy(false);
-    el.feed.replaceChildren();
-    setSession(null); // новую сессию сервер создаст на первой реплике (POST /api/chat без session_id)
-    state.leadId = null;
-    state.leadDeclined = false;
-    el.input.value = "";
-    autosize();
+    resetConversation();
     greet();
 
     if (hadTalk) {
@@ -293,7 +311,11 @@ const Chat = (() => {
     try {
       const res = await Api.chat(state.sessionId, text, id);
       // Пока ждали, начали новый диалог: ответ кладём в сохранённый прошлый разговор («Вернуть прошлый»)
-      if (epoch !== state.epoch) { parkAnswer(epoch, typing, botNode(res.answer, res.debug), res.session_id); return; }
+      if (epoch !== state.epoch) {
+        parkAnswer(epoch, typing, botNode(res.answer, res.debug), res.session_id);
+        loadDialogs();
+        return;
+      }
       setSession(res.session_id);
       typing.remove();
       addBot(res.answer, res.debug);
@@ -652,11 +674,14 @@ const Chat = (() => {
     submit.disabled = true;
     submit.textContent = "Отправляем…";
     const phone = leadPhone(form);
-    let sessionId = null; // заявка относится к этому диалогу, даже если клиент откроет другой
+    const epoch = state.epoch;
+    let sessionId = state.sessionId; // заявка относится к этому диалогу, даже если клиент откроет другой
     try {
       // Заявке нужна сессия: если клиент ещё ничего не писал — создаём её
-      if (!state.sessionId) setSession((await Api.newSession()).session_id);
-      sessionId = state.sessionId;
+      if (!sessionId) {
+        sessionId = (await Api.newSession()).session_id;
+        if (epoch === state.epoch && !state.sessionId && el.feed.contains(form)) setSession(sessionId);
+      }
       // Прошлая попытка оборвалась без ответа, а сервер мог дописать заявку позже —
       // сначала сверяемся с сессией и отправляем, только если заявки там ещё нет
       if (form.dataset.unsure === "1") {
