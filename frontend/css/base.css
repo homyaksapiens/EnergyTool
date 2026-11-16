@@ -1,6 +1,36 @@
 /* base.css — общие цвета, шрифт и мелочи браузера. Подключается на всех страницах.
    Палитра — от команды по сайтам МТС: красный #cf2e2e, белый, розовый #f78da7 для особых объектов. */
 
+/* Для локального просмотра отдаём установленный Arial: браузеру не нужна своя копия шрифта. */
+@font-face {
+  font-family: Arial;
+  src: url("../fonts/local-arial/arial.ttf") format("truetype"), local("Arial");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: Arial;
+  src: url("../fonts/local-arial/arialbd.ttf") format("truetype"), local("Arial Bold");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: Arial;
+  src: url("../fonts/local-arial/ariali.ttf") format("truetype"), local("Arial Italic");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: Arial;
+  src: url("../fonts/local-arial/arialbi.ttf") format("truetype"), local("Arial Bold Italic");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
 :root {
   /* Цвета от команды — как на сайтах МТС */
   --red: #cf2e2e;            /* фирменный красный. Белый текст на нём — контраст 5,1 */
