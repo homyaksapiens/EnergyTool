@@ -16,11 +16,26 @@ import time
 import llm_client
 from kb import Chunk, KnowledgeBase
 from prompts import FALLBACK_ANSWER, build_system
-from settings import CANDIDATES, CONTEXT_CHUNKS, MAX_TOKENS, TEMPERATURE, USE_RERANK
+from settings import (CANDIDATES, CONTEXT_CHUNKS, MAX_TOKENS, MIN_CONTEXT_CHUNKS, RERANK_MIN_SCORE, TEMPERATURE,
+                      USE_RERANK)
 
 ROLE_RE = re.compile(r"^\s*(Пользователь|Клиент|User|Ассистент|Консультант|Бот|Assistant)\s*:\s*(.*)$", re.I)
 ASSISTANT_ROLES = {"ассистент", "консультант", "бот", "assistant"}
 THINK_RE = re.compile(r"<think>.*?</think>", re.S)
+
+# Прямые и косвенные вопросительные конструкции в последнем предложении, где модель могла поставить точку вместо «?»
+INTERROGATIVE_TAIL_RE = re.compile(
+    r"(?:^|[.!;]\s+)"
+    r"(?:подскажите|уточните|назовите|сообщите|скажите)?[,:\s]*"
+    r"(?:пожалуйста[,:\s]*)?"
+    r"(?:а\s+|и\s+|но\s+|также\s+)?"
+    r"(?:какой|какая|какое|какие|каков\w*|сколько|скольких|где|когда|куда|откуда|"
+    r"как(?:ой|ая|ое|ие|им|ими|их|ому|ую)?|почему|зачем|в\s+каком|в\s+какой|на\s+каком|на\s+какой|"
+    r"есть\s+ли|планируете\s+ли|рассматриваете\s+ли|требуется\s+ли|нуж(?:ен|на|но|ны)\s+ли|"
+    r"имеется\s+ли|ведется\s+ли|ведётся\s+ли|знаете\s+ли|можете\s+ли|хотите\s+ли|готовы\s+ли)\b"
+    r"[^?]*$",
+    re.I,
+)
 
 # Гарантированный бюджет токенов на 1-й попытке, чтобы глубокое рассуждение <think> не обрывалось
 THINK_MAX_TOKENS = max(MAX_TOKENS, 2500)
@@ -31,10 +46,12 @@ SUMMARY_SYSTEM_PROMPT = (
     "Правила:\n"
     "1. Главный фокус — строго на последнем вопросе и последней реплике клиента.\n"
     "2. Замени местоимения и неполные ссылки («это», «таких данных», «четвёртая», «для оценки») "
-    "на конкретные термины, тип объекта, цифры и условия из предыдущих реплик диалога.\n"
-    "3. ЗАПРЕЩЕНО использовать водные и мета-слова: «клиент», «пользователь», «консультант», «ассистент», "
+    "на конкретные термины, тип объекта и условия из предыдущих реплик диалога.\n"
+    "3. Если количество или числительное в репликах клиента написано словами, оставляй его строго словами — "
+    "ЗАПРЕЩЕНО переводить числительные из реплик клиента в цифры (0–9).\n"
+    "4. ЗАПРЕЩЕНО использовать водные и мета-слова: «клиент», «пользователь», «консультант», «ассистент», "
     "«спрашивает», «интересуется», «хочет узнать», «просит объяснить», «в диалоге».\n"
-    "4. Не отвечай на вопрос и ничего не додумывай. Выведи только одну строку — готовый запрос без кавычек."
+    "5. Не отвечай на вопрос и ничего не додумывай. Выведи только одну строку — готовый запрос без кавычек."
 )
 
 _SUMMARY_CACHE: dict[tuple[tuple[str, str], ...], str] = {}
@@ -59,7 +76,7 @@ def parse_dialog(text: str) -> list[dict]:
     return [m for m in messages if m["content"].strip()] or [{"role": "user", "content": text.strip()}]
 
 
-def clean_answer(text: str) -> str:
+def clean_answer(text: str, ensure_question_mark: bool = True) -> str:
     text = text or ""
     if "</think>" in text:  # рассуждение могло начаться ещё в шаблоне промпта — берём то, что после него
         text = text.rsplit("</think>", 1)[1]
@@ -68,7 +85,12 @@ def clean_answer(text: str) -> str:
         text = text.split("<think>", 1)[0]
     text = re.sub(r"\*\*|__|`|^#+\s*", "", text, flags=re.M)
     text = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", text, flags=re.M)
-    return " ".join(text.split())
+    text = " ".join(text.split())
+    if ensure_question_mark and text and not text.endswith("?"):
+        m = INTERROGATIVE_TAIL_RE.search(text)
+        if m and not re.search(r"\bбы\b.*\bни\b", m.group(0), re.I):
+            text = text.rstrip(".!… ") + "?"
+    return text
 
 
 def _dialog_cache_key(messages: list[dict]) -> tuple[tuple[str, str], ...]:
@@ -102,7 +124,7 @@ def summarize_dialog(messages: list[dict]) -> str:
     summary = ""
     try:
         raw, _ = llm_client.chat(convo, temperature=0.0, max_tokens=SUMMARY_MAX_TOKENS)
-        summary = clean_answer(raw).strip("«»\"'")
+        summary = clean_answer(raw, ensure_question_mark=False).strip("«»\"'")
     except Exception as e:  # noqa: BLE001 — при любой ошибке работаем по базовым запросам без падения
         print(f"Суммаризатор диалога недоступен: {e!r}", file=sys.stderr)
         summary = ""
@@ -138,19 +160,44 @@ def search_queries(messages: list[dict]) -> list[str]:
     return queries
 
 
+def extract_client_facts(messages: list[dict]) -> str:
+    """Формирует чёткую структурированную сводку известных фактов клиента по шагам диалога."""
+    facts: list[str] = []
+    user_step = 0
+    for i, m in enumerate(messages):
+        if m.get("role") != "user":
+            continue
+        content = m.get("content", "").strip()
+        if not content:
+            continue
+        user_step += 1
+        if user_step == 1:
+            facts.append(f"- Исходный запрос и задача: {content}")
+        else:
+            prev_q = ""
+            if i > 0 and messages[i - 1].get("role") == "assistant":
+                prev_text = messages[i - 1].get("content", "").strip()
+                q_matches = re.findall(r"[^.!?\n]+\?", prev_text)
+                if q_matches:
+                    prev_q = q_matches[-1].strip()
+            if prev_q:
+                facts.append(f"- Ответ клиента на уточнение («{prev_q}»): {content}")
+            else:
+                facts.append(f"- Дополнение клиента (шаг {user_step}): {content}")
+    return "\n".join(facts)
+
+
 def format_dialog_sandwich(messages: list[dict]) -> list[dict]:
     """Техника «сэндвича» для многоходовых диалогов:
-    фиксирует глобальную задачу клиента, сводку уже известных фактов, список уже заданных вопросов
-    и напоминает правила SYSTEM_PROMPT в конце. Для одиночных вопросов возвращает messages без изменений.
+    фиксирует глобальную задачу клиента, чёткую сводку уже известных фактов и правила Context Critic / Guardrails.
+    Для одиночных вопросов возвращает messages без изменений.
     """
     if len(messages) <= 1:
         return messages
 
     users = [m["content"].strip() for m in messages if m["role"] == "user" and m["content"].strip()]
-    assistants = [m["content"].strip() for m in messages[:-1] if m["role"] == "assistant" and m["content"].strip()]
     global_goal = users[0] if users else messages[0]["content"].strip()
-    known_facts = " ".join(users)
-    already_asked = " | ".join(assistants)
+    known_facts = extract_client_facts(messages)
     last_reply = messages[-1]["content"].strip()
     summary = summarize_dialog(messages)
 
@@ -160,22 +207,28 @@ def format_dialog_sandwich(messages: list[dict]) -> list[dict]:
     ]
     history_block = "\n".join(history_lines)
     summary_line = f"Суть текущего вопроса с учётом контекста: {summary}\n" if summary else ""
-    asked_line = f"Вопросы, которые консультант УЖЕ задавал (не повторяй их): {already_asked}\n" if already_asked else ""
 
     sandwich_prompt = (
         f"Исходная задача клиента (глобальная тема): {global_goal}\n"
-        f"Все факты, которые клиент уже сообщил о себе и объекте: {known_facts}\n"
-        f"{asked_line}"
+        f"Сводка известных фактов о клиенте и объекте:\n{known_facts}\n"
         f"{summary_line}\n"
         f"Предыдущие реплики диалога:\n{history_block}\n\n"
         f"Последняя реплика клиента (ответь на неё):\n{last_reply}\n\n"
-        f"Напоминание правил ответа: ответь на последнюю реплику клиента строго по материалам EnergyTool. "
-        f"Начни с прямого ответа по сути («Да, …», «Нет, …» или сама суть) и в первом-втором предложении явно "
-        f"привяжи ответ к типу объекта и уже известным условиям клиента из истории диалога (если клиент назвал "
-        f"количество словами, например «три склада» или «около сорока», пиши его тоже словами, не заменяя на цифры, "
-        f"которых нет в материалах). Затем за 1–2 предложения укажи ключевые условия и оговорки из материалов. "
-        f"Объём — 2–4 предложения, 30–70 слов, обычный связный текст без списков и markdown. В конце задай один "
-        f"новый уточняющий вопрос для следующего шага, но НЕ спрашивай то, что клиент уже сообщил или что консультант уже спрашивал."
+        f"Напоминание правил ответа:\n"
+        f"1. Ответь на последнюю реплику клиента с учётом его исходной задачи и ВСЕХ сообщённых им фактов "
+        f"из сводки выше строго по материалам EnergyTool.\n"
+        f"2. Селективная фильтрация контекста: используй только те ограничения и оговорки из материалов, которые "
+        f"относятся непосредственно к названным клиентом условиям. Не приплетай ограничения для других условий "
+        f"объекта и не называй цены, стоимость тарифов, условия рассрочки или длительность промо-периода, если "
+        f"клиент не спрашивал про стоимость или оплату.\n"
+        f"3. Запрет на перевод числительных в цифры: ЗАПРЕЩЕНО переводить числительные, написанные клиентом "
+        f"словами в репликах диалога, в цифры (0–9), если этих цифр нет в материалах EnergyTool (пиши их словами, "
+        f"как у клиента, либо не используй число).\n"
+        f"4. Формат и вопрос в конце: начни с прямого ответа по сути («Да, …», «Нет, …» или сама суть), затем "
+        f"1–2 предложения: от чего зависит результат для ситуации клиента или важная оговорка. Объём — 2–4 "
+        f"предложения, 30–70 слов, обычный связный текст без списков и markdown. В самом конце задай один прямой "
+        f"уточняющий вопрос для подбора решения (НЕ спрашивай то, что клиент уже сообщил в сводке выше) и строго "
+        f"закончи ответ вопросительным знаком «?»."
     )
     return [{"role": "user", "content": sandwich_prompt}]
 
@@ -190,12 +243,14 @@ class Consultant:
     ) -> tuple[list[Chunk], bool, list[Chunk], list[str]]:
         queries = search_queries(messages)
         candidates = self.kb.search(queries, query_vectors, k=CANDIDATES)
-        if self.rerank_ok and len(candidates) > CONTEXT_CHUNKS:
+        if self.rerank_ok and len(candidates) > MIN_CONTEXT_CHUNKS:
             try:
                 order = llm_client.rerank(
                     queries[-1][:2000],
                     [c.render()[:2000] for c in candidates],
                     CONTEXT_CHUNKS,
+                    min_score=RERANK_MIN_SCORE,
+                    min_k=MIN_CONTEXT_CHUNKS,
                 )
                 if order:
                     return [candidates[i] for i in order][:CONTEXT_CHUNKS], True, candidates, queries
@@ -244,3 +299,4 @@ class Consultant:
             "queries": queries,
             "timings": {"retrieval": round(t1 - t0, 2), "llm": round(time.time() - t1, 2)},
         }
+        

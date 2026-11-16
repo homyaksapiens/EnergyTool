@@ -119,9 +119,7 @@ def normalize(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-MIN_SECTION_CHARS = 700  # порог для склейки мелких соседних подсекций одного раздела ##
-HEAD_RE = re.compile(r"^(#{1,3})\s+(.*\S)\s*$")  # режем по #{1,3}, а #### оставляем внутри чанка
-SUBHEAD_4_RE = re.compile(r"^#{4,}\s+(.*\S)\s*$")
+HEAD_RE = re.compile(r"^(#{1,4})\s+(.*\S)\s*$")
 
 
 def _sections(text: str, fallback_title: str) -> list[tuple[str, str]]:
@@ -136,10 +134,6 @@ def _sections(text: str, fallback_title: str) -> list[tuple[str, str]]:
         buf.clear()
 
     for line in text.split("\n"):
-        m4 = SUBHEAD_4_RE.match(line)
-        if m4:
-            buf.append(f"{m4.group(1)}:")
-            continue
         m = HEAD_RE.match(line)
         if not m:
             buf.append(line)
